@@ -13,17 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
+        goos: [linux]
+        goarch: [amd64, arm64]
 
     steps:
       - name: Checkout code
@@ -46,47 +37,28 @@ jobs:
           CGO_ENABLED: 0
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
-          EXT=""
-          if [ "$GOOS" = "windows" ]; then
-            EXT=".exe"
-          fi
-
-          BINARY_NAME="orrisp-${GOOS}-${GOARCH}${EXT}"
+          BINARY_NAME="orrisp-${GOOS}-${GOARCH}"
 
           go build -ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
             -o bin/${BINARY_NAME} \
             cmd/orrisp/main.go
 
-      - name: Compress with UPX (Linux only)
-        if: matrix.goos == 'linux'
+      - name: Compress with UPX
         run: |
-          EXT=""
-          BINARY_NAME="orrisp-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
-          upx --best --lzma bin/${BINARY_NAME} || true
+          BINARY_NAME="orrisp-${{ matrix.goos }}-${{ matrix.goarch }}"
+          upx --best --lzma bin/${BINARY_NAME}
 
       - name: Create archive
         run: |
           cd bin
-          EXT=""
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            EXT=".exe"
-          fi
-          BINARY_NAME="orrisp-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
-          ARCHIVE_NAME="orrisp-${{ matrix.goos }}-${{ matrix.goarch }}"
-
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip ${ARCHIVE_NAME}.zip ${BINARY_NAME}
-          else
-            tar -czvf ${ARCHIVE_NAME}.tar.gz ${BINARY_NAME}
-          fi
+          BINARY_NAME="orrisp-${{ matrix.goos }}-${{ matrix.goarch }}"
+          tar -czvf ${BINARY_NAME}.tar.gz ${BINARY_NAME}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: orrisp-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: |
-            bin/*.tar.gz
-            bin/*.zip
+          path: bin/*.tar.gz
 
   publish:
     needs: release
@@ -103,7 +75,7 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release/ \;
+          find artifacts -type f -name "*.tar.gz" -exec cp {} release/ \;
           ls -la release/
 
       - name: Generate checksums
