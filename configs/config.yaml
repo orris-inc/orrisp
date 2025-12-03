@@ -1,0 +1,37 @@
+# API 配置
+api:
+  # 后端 API 地址
+  base_url: "http://localhost:8081"
+  # 节点 ID
+  node_id: 2
+  # 节点 Token
+  node_token: "node_nrYRPTkEP8xqhmJMJors9evIktCCw2eSyvYBEX7S9eo"
+  # API 请求超时(秒)
+  timeout: 30
+
+# 节点配置
+node:
+  # 监听端口(0 表示使用服务端配置)
+  listen_port: 0
+  # TLS 证书路径(Trojan 协议需要)
+  cert_path: ""
+  # TLS 私钥路径(Trojan 协议需要)
+  key_path: ""
+
+# 同步配置
+sync:
+  # 用户同步间隔(秒)
+  user_interval: 60
+  # 流量上报间隔(秒)
+  traffic_interval: 60
+  # 状态上报间隔(秒)
+  status_interval: 30
+  # 在线用户上报间隔(秒)
+  online_interval: 10
+
+# 日志配置
+log:
+  # 日志级别: debug, info, warn, error
+  level: "info"
+  # 输出方式: stdout 或文件路径
+  output: "stdout"
