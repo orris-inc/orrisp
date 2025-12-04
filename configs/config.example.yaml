@@ -2,21 +2,24 @@
 api:
   # 后端 API 地址
   base_url: "https://api.example.com"
-  # 节点 ID
-  node_id: 1
-  # 节点 Token
-  node_token: "your_node_token_here"
   # API 请求超时(秒)
   timeout: 30
 
-# 节点配置
-node:
-  # 监听端口(0 表示使用服务端配置)
-  listen_port: 0
-  # TLS 证书路径(Trojan 协议需要)
-  cert_path: ""
-  # TLS 私钥路径(Trojan 协议需要)
-  key_path: ""
+# 节点配置 (支持单节点或多节点)
+nodes:
+  - id: 1
+    token: "your_node_token_here"
+    cert_path: ""        # TLS 证书路径 (Trojan/VLESS 协议需要)
+    key_path: ""         # TLS 私钥路径 (Trojan/VLESS 协议需要)
+  # 多节点配置示例:
+  # - id: 2
+  #   token: "node2_token_here"
+  #   cert_path: ""
+  #   key_path: ""
+  # - id: 3
+  #   token: "node3_token_here"
+  #   cert_path: ""
+  #   key_path: ""
 
 # 同步配置
 sync:

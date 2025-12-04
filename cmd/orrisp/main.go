@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -15,21 +14,18 @@ import (
 )
 
 var (
-	configPath = flag.String("c", "configs/config.yaml", "configuration file path")
-	version    = "dev"
-	buildTime  = "unknown"
+	version   = "dev"
+	buildTime = "unknown"
 )
 
 func main() {
-	flag.Parse()
-
 	// Print version information
 	fmt.Printf("Orrisp Node Agent\n")
 	fmt.Printf("Version: %s\n", version)
 	fmt.Printf("Build Time: %s\n\n", buildTime)
 
-	// Load configuration
-	cfg, err := config.Load(*configPath)
+	// Load configuration from CLI flags or config file
+	cfg, err := config.LoadFromCLI()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
 		os.Exit(1)
@@ -43,32 +39,35 @@ func main() {
 	}
 	defer logger.Sync()
 
+	// Get node instances
+	instances := cfg.GetNodeInstances()
 	logger.Info("Configuration loaded successfully",
-		zap.String("config_path", *configPath),
 		zap.String("api_base_url", cfg.API.BaseURL),
-		zap.Int("node_id", cfg.API.NodeID),
+		zap.Int("node_count", len(instances)),
 	)
-
-	// Create node service
-	nodeService, err := service.NewNodeService(cfg, logger)
-	if err != nil {
-		logger.Fatal("Failed to create node service", zap.Error(err))
-	}
 
 	// Create context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start node service
-	if err := nodeService.Start(ctx); err != nil {
-		logger.Fatal("Failed to start node service", zap.Error(err))
+	// Create and start multi-node service
+	multiNodeService, err := service.NewMultiNodeService(cfg, logger)
+	if err != nil {
+		logger.Fatal("Failed to create multi-node service", zap.Error(err))
+	}
+
+	// Start all node services
+	if err := multiNodeService.Start(ctx); err != nil {
+		logger.Fatal("Failed to start multi-node service", zap.Error(err))
 	}
 
 	// Wait for signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	logger.Info("Node service is running, press Ctrl+C to exit...")
+	logger.Info("Node service is running, press Ctrl+C to exit...",
+		zap.Int("node_count", len(instances)),
+	)
 
 	// Block waiting for signal
 	sig := <-sigChan
@@ -77,9 +76,9 @@ func main() {
 	// Cancel context
 	cancel()
 
-	// Stop service
-	if err := nodeService.Stop(); err != nil {
-		logger.Error("Failed to stop node service", zap.Error(err))
+	// Stop all services
+	if err := multiNodeService.Stop(); err != nil {
+		logger.Error("Failed to stop multi-node service", zap.Error(err))
 		os.Exit(1)
 	}
 

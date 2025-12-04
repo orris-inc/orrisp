@@ -10,25 +10,24 @@ import (
 
 // Config application configuration
 type Config struct {
-	API  APIConfig  `yaml:"api"`
-	Node NodeConfig `yaml:"node"`
-	Sync SyncConfig `yaml:"sync"`
-	Log  LogConfig  `yaml:"log"`
+	API   APIConfig      `yaml:"api"`
+	Nodes []NodeInstance `yaml:"nodes"` // Node instances configuration
+	Sync  SyncConfig     `yaml:"sync"`
+	Log   LogConfig      `yaml:"log"`
 }
 
 // APIConfig API related configuration
 type APIConfig struct {
-	BaseURL   string `yaml:"base_url"`
-	NodeID    int    `yaml:"node_id"`
-	NodeToken string `yaml:"node_token"`
-	Timeout   int    `yaml:"timeout"` // Request timeout (seconds)
+	BaseURL string `yaml:"base_url"`
+	Timeout int    `yaml:"timeout"` // Request timeout (seconds)
 }
 
-// NodeConfig node configuration
-type NodeConfig struct {
-	ListenPort int    `yaml:"listen_port"` // Override server-side configuration
-	CertPath   string `yaml:"cert_path"`   // TLS certificate path
-	KeyPath    string `yaml:"key_path"`    // TLS private key path
+// NodeInstance represents a single node instance configuration
+type NodeInstance struct {
+	ID       int    `yaml:"id"`        // Node ID
+	Token    string `yaml:"token"`     // Node authentication token
+	CertPath string `yaml:"cert_path"` // TLS certificate path
+	KeyPath  string `yaml:"key_path"`  // TLS private key path
 }
 
 // SyncConfig synchronization configuration
@@ -88,13 +87,31 @@ func (c *Config) Validate() error {
 	if c.API.BaseURL == "" {
 		return fmt.Errorf("api.base_url cannot be empty")
 	}
-	if c.API.NodeID <= 0 {
-		return fmt.Errorf("api.node_id must be greater than 0")
+
+	if len(c.Nodes) == 0 {
+		return fmt.Errorf("nodes cannot be empty, at least one node is required")
 	}
-	if c.API.NodeToken == "" {
-		return fmt.Errorf("api.node_token cannot be empty")
+
+	// Validate each node instance
+	seenIDs := make(map[int]bool)
+	for i, node := range c.Nodes {
+		if node.ID <= 0 {
+			return fmt.Errorf("nodes[%d].id must be greater than 0", i)
+		}
+		if node.Token == "" {
+			return fmt.Errorf("nodes[%d].token cannot be empty", i)
+		}
+		if seenIDs[node.ID] {
+			return fmt.Errorf("duplicate node id: %d", node.ID)
+		}
+		seenIDs[node.ID] = true
 	}
 	return nil
+}
+
+// GetNodeInstances returns all node instances to run
+func (c *Config) GetNodeInstances() []NodeInstance {
+	return c.Nodes
 }
 
 // GetUserSyncInterval gets user sync interval

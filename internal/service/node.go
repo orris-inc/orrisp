@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/easayliu/orrisp/internal/api"
@@ -19,6 +20,7 @@ import (
 // NodeService node service
 type NodeService struct {
 	config         *config.Config
+	nodeInstance   config.NodeInstance // Node instance configuration
 	apiClient      *api.Client
 	singboxService *singbox.Service
 	statsClient    *stats.Client
@@ -38,8 +40,8 @@ type NodeService struct {
 	keyPath  string
 }
 
-// NewNodeService creates new node service
-func NewNodeService(cfg *config.Config, logger *zap.Logger) (*NodeService, error) {
+// NewNodeService creates new node service for a specific node instance
+func NewNodeService(cfg *config.Config, nodeInstance config.NodeInstance, logger *zap.Logger) (*NodeService, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
@@ -47,11 +49,14 @@ func NewNodeService(cfg *config.Config, logger *zap.Logger) (*NodeService, error
 		return nil, fmt.Errorf("logger cannot be nil")
 	}
 
+	// Create logger with node ID context
+	nodeLogger := logger.With(zap.Int("node_id", nodeInstance.ID))
+
 	// Create API client with functional options
 	apiClient := api.NewClient(
 		cfg.API.BaseURL,
-		cfg.API.NodeID,
-		cfg.API.NodeToken,
+		nodeInstance.ID,
+		nodeInstance.Token,
 		api.WithTimeout(cfg.GetAPITimeout()),
 	)
 
@@ -59,14 +64,15 @@ func NewNodeService(cfg *config.Config, logger *zap.Logger) (*NodeService, error
 	statsClient := stats.NewClient()
 
 	// Create traffic tracker for sing-box
-	trafficTracker := singbox.NewTrafficTracker(statsClient, logger)
+	trafficTracker := singbox.NewTrafficTracker(statsClient, nodeLogger)
 
 	return &NodeService{
 		config:         cfg,
+		nodeInstance:   nodeInstance,
 		apiClient:      apiClient,
 		statsClient:    statsClient,
 		trafficTracker: trafficTracker,
-		logger:         logger,
+		logger:         nodeLogger,
 		startTime:      time.Now(),
 	}, nil
 }
@@ -301,8 +307,8 @@ func (s *NodeService) collectSystemStatus() *api.NodeStatus {
 	// Memory usage
 	memPercent := fmt.Sprintf("%.1f%%", float64(mem.Alloc)/float64(mem.Sys)*100)
 
-	// Disk usage (simplified version)
-	diskPercent := "0%"
+	// Disk usage
+	diskPercent := s.getDiskUsage()
 
 	return &api.NodeStatus{
 		CPU:    cpuPercent,
@@ -310,6 +316,26 @@ func (s *NodeService) collectSystemStatus() *api.NodeStatus {
 		Disk:   diskPercent,
 		Uptime: uptime,
 	}
+}
+
+// getDiskUsage gets disk usage percentage for root filesystem
+func (s *NodeService) getDiskUsage() string {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs("/", &stat); err != nil {
+		s.logger.Debug("Failed to get disk usage", zap.Error(err))
+		return "0%"
+	}
+
+	total := stat.Blocks * uint64(stat.Bsize)
+	free := stat.Bfree * uint64(stat.Bsize)
+	used := total - free
+
+	if total == 0 {
+		return "0%"
+	}
+
+	percent := float64(used) / float64(total) * 100
+	return fmt.Sprintf("%.1f%%", percent)
 }
 
 // startSingbox starts sing-box
@@ -371,11 +397,8 @@ func (s *NodeService) generateSingboxOptions() (*option.Options, error) {
 		return nil, fmt.Errorf("node configuration not initialized")
 	}
 
-	// Copy node configuration, use local port if overridden
+	// Copy node configuration
 	nodeConfig := *s.nodeConfig
-	if s.config.Node.ListenPort > 0 {
-		nodeConfig.ServerPort = s.config.Node.ListenPort
-	}
 	// Use :: to listen on all addresses
 	nodeConfig.ServerHost = "::"
 
@@ -436,10 +459,10 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 		return s.certPath, s.keyPath, nil
 	}
 
-	// Use configured paths if available
-	if s.config.Node.CertPath != "" && s.config.Node.KeyPath != "" {
-		s.certPath = s.config.Node.CertPath
-		s.keyPath = s.config.Node.KeyPath
+	// Use configured paths if available (check node instance first)
+	if s.nodeInstance.CertPath != "" && s.nodeInstance.KeyPath != "" {
+		s.certPath = s.nodeInstance.CertPath
+		s.keyPath = s.nodeInstance.KeyPath
 		s.logger.Info("Using configured TLS certificate",
 			zap.String("cert_path", s.certPath),
 			zap.String("key_path", s.keyPath),
@@ -447,9 +470,10 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 		return s.certPath, s.keyPath, nil
 	}
 
-	// Generate self-signed certificate
+	// Generate self-signed certificate (use node ID in path for multi-node support)
+	certDir := fmt.Sprintf("/tmp/orrisp/certs/node-%d", s.nodeInstance.ID)
 	s.logger.Info("Generating self-signed TLS certificate", zap.String("sni", sni))
-	selfSigned, err := cert.GenerateSelfSigned("/tmp/orrisp/certs", sni)
+	selfSigned, err := cert.GenerateSelfSigned(certDir, sni)
 	if err != nil {
 		return "", "", err
 	}
