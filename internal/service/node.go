@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/easayliu/orrisp/internal/api"
+	"github.com/easayliu/orrisp/internal/cert"
 	"github.com/easayliu/orrisp/internal/config"
 	"github.com/easayliu/orrisp/internal/singbox"
 	"github.com/easayliu/orrisp/internal/stats"
@@ -21,6 +22,7 @@ type NodeService struct {
 	apiClient      *api.Client
 	singboxService *singbox.Service
 	statsClient    *stats.Client
+	trafficTracker *singbox.TrafficTracker
 	logger         *zap.Logger
 
 	mu           sync.RWMutex
@@ -30,6 +32,10 @@ type NodeService struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
+
+	// TLS certificate paths (auto-generated if not configured)
+	certPath string
+	keyPath  string
 }
 
 // NewNodeService creates new node service
@@ -52,12 +58,16 @@ func NewNodeService(cfg *config.Config, logger *zap.Logger) (*NodeService, error
 	// Create traffic statistics client
 	statsClient := stats.NewClient()
 
+	// Create traffic tracker for sing-box
+	trafficTracker := singbox.NewTrafficTracker(statsClient, logger)
+
 	return &NodeService{
-		config:      cfg,
-		apiClient:   apiClient,
-		statsClient: statsClient,
-		logger:      logger,
-		startTime:   time.Now(),
+		config:         cfg,
+		apiClient:      apiClient,
+		statsClient:    statsClient,
+		trafficTracker: trafficTracker,
+		logger:         logger,
+		startTime:      time.Now(),
 	}, nil
 }
 
@@ -167,6 +177,9 @@ func (s *NodeService) syncUsers() error {
 	s.currentUsers = users
 	s.mu.Unlock()
 
+	// Update traffic tracker user mapping
+	s.updateUserMap(users)
+
 	newCount := len(users)
 	s.logger.Info("User list synchronized successfully",
 		zap.Int("old_count", oldCount),
@@ -185,6 +198,15 @@ func (s *NodeService) syncUsers() error {
 	return nil
 }
 
+// updateUserMap updates the traffic tracker's user mapping
+func (s *NodeService) updateUserMap(users []api.Subscription) {
+	userMap := make(map[string]int, len(users))
+	for _, user := range users {
+		userMap[user.Name] = user.SubscriptionID
+	}
+	s.trafficTracker.SetUserMap(userMap)
+}
+
 // reportTraffic reports traffic
 func (s *NodeService) reportTraffic() error {
 	// Get and reset traffic statistics
@@ -195,7 +217,14 @@ func (s *NodeService) reportTraffic() error {
 		return nil
 	}
 
-	s.logger.Debug("Reporting traffic data", zap.Int("count", len(trafficItems)))
+	// Log detailed traffic data for debugging
+	for _, item := range trafficItems {
+		s.logger.Info("Traffic collected",
+			zap.Int("subscription_id", item.SubscriptionID),
+			zap.Int64("upload", item.Upload),
+			zap.Int64("download", item.Download),
+		)
+	}
 
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
@@ -299,13 +328,16 @@ func (s *NodeService) startSingbox() error {
 		return fmt.Errorf("failed to create sing-box service: %w", err)
 	}
 
+	// Set traffic tracker for statistics
+	service.SetTracker(s.trafficTracker)
+
 	// Start service
 	if err := service.Start(); err != nil {
 		return fmt.Errorf("failed to start sing-box service: %w", err)
 	}
 
 	s.singboxService = service
-	s.logger.Info("sing-box started successfully")
+	s.logger.Info("sing-box started successfully with traffic tracking enabled")
 	return nil
 }
 
@@ -348,7 +380,7 @@ func (s *NodeService) generateSingboxOptions() (*option.Options, error) {
 	nodeConfig.ServerHost = "::"
 
 	// Use builder to generate configuration
-	// Temporarily disable Clash API, enable traffic statistics functionality later
+	// Traffic statistics is handled by ConnectionTracker, no need for Clash API
 	clashAPIAddr := ""
 	options, err := singbox.BuildConfig(&nodeConfig, s.currentUsers, clashAPIAddr)
 	if err != nil {
@@ -367,22 +399,27 @@ func (s *NodeService) generateSingboxOptions() (*option.Options, error) {
 		zap.Bool("has_clash_api", hasClashAPI),
 	)
 
-	// If using trojan or vless protocol, configure TLS certificate path
-	if (nodeConfig.Protocol == "trojan" || nodeConfig.Protocol == "vless") &&
-		s.config.Node.CertPath != "" && s.config.Node.KeyPath != "" {
+	// If using trojan or vless protocol, configure TLS certificate
+	if nodeConfig.Protocol == "trojan" || nodeConfig.Protocol == "vless" {
+		// Ensure certificate exists (generate self-signed if not configured)
+		certPath, keyPath, err := s.ensureTLSCert(nodeConfig.SNI)
+		if err != nil {
+			return nil, fmt.Errorf("failed to ensure TLS certificate: %w", err)
+		}
+
 		for i := range options.Inbounds {
 			if options.Inbounds[i].Type == "trojan" {
 				if trojanOpts, ok := options.Inbounds[i].Options.(*option.TrojanInboundOptions); ok {
 					if trojanOpts.TLS != nil {
-						trojanOpts.TLS.CertificatePath = s.config.Node.CertPath
-						trojanOpts.TLS.KeyPath = s.config.Node.KeyPath
+						trojanOpts.TLS.CertificatePath = certPath
+						trojanOpts.TLS.KeyPath = keyPath
 					}
 				}
 			} else if options.Inbounds[i].Type == "vless" {
 				if vlessOpts, ok := options.Inbounds[i].Options.(*option.VLESSInboundOptions); ok {
 					if vlessOpts.TLS != nil {
-						vlessOpts.TLS.CertificatePath = s.config.Node.CertPath
-						vlessOpts.TLS.KeyPath = s.config.Node.KeyPath
+						vlessOpts.TLS.CertificatePath = certPath
+						vlessOpts.TLS.KeyPath = keyPath
 					}
 				}
 			}
@@ -390,6 +427,41 @@ func (s *NodeService) generateSingboxOptions() (*option.Options, error) {
 	}
 
 	return options, nil
+}
+
+// ensureTLSCert ensures TLS certificate exists, generates self-signed if not configured
+func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
+	// Use cached paths if already generated
+	if s.certPath != "" && s.keyPath != "" {
+		return s.certPath, s.keyPath, nil
+	}
+
+	// Use configured paths if available
+	if s.config.Node.CertPath != "" && s.config.Node.KeyPath != "" {
+		s.certPath = s.config.Node.CertPath
+		s.keyPath = s.config.Node.KeyPath
+		s.logger.Info("Using configured TLS certificate",
+			zap.String("cert_path", s.certPath),
+			zap.String("key_path", s.keyPath),
+		)
+		return s.certPath, s.keyPath, nil
+	}
+
+	// Generate self-signed certificate
+	s.logger.Info("Generating self-signed TLS certificate", zap.String("sni", sni))
+	selfSigned, err := cert.GenerateSelfSigned("/tmp/orrisp/certs", sni)
+	if err != nil {
+		return "", "", err
+	}
+
+	s.certPath = selfSigned.CertPath
+	s.keyPath = selfSigned.KeyPath
+	s.logger.Info("Self-signed TLS certificate generated",
+		zap.String("cert_path", s.certPath),
+		zap.String("key_path", s.keyPath),
+	)
+
+	return s.certPath, s.keyPath, nil
 }
 
 // startScheduledTasks starts scheduled tasks

@@ -20,6 +20,7 @@ type Service struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	interceptor *StderrInterceptor
+	tracker     *TrafficTracker
 }
 
 // NewService creates sing-box service instance
@@ -66,6 +67,13 @@ func NewService(options *option.Options, logger *zap.Logger) (*Service, error) {
 	}, nil
 }
 
+// SetTracker sets the traffic tracker for the service
+func (s *Service) SetTracker(tracker *TrafficTracker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tracker = tracker
+}
+
 // Start starts sing-box service
 func (s *Service) Start() error {
 	s.mu.RLock()
@@ -73,6 +81,11 @@ func (s *Service) Start() error {
 
 	if s.box == nil {
 		return fmt.Errorf("sing-box instance not initialized")
+	}
+
+	// Register traffic tracker to router if set
+	if s.tracker != nil {
+		s.box.Router().AppendTracker(s.tracker)
 	}
 
 	// Start sing-box
@@ -144,6 +157,11 @@ func (s *Service) Reload(options *option.Options) error {
 	if err != nil {
 		cancel()
 		return fmt.Errorf("failed to create new sing-box instance: %w", err)
+	}
+
+	// Register traffic tracker to router if set
+	if s.tracker != nil {
+		instance.Router().AppendTracker(s.tracker)
 	}
 
 	// Start new instance

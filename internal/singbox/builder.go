@@ -142,6 +142,17 @@ func buildTrojanInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscrip
 	// Convert netip.Addr to badoption.Addr
 	badAddr := badoption.Addr(listenAddr)
 
+	// Build TLS options
+	tlsOptions := &option.InboundTLSOptions{
+		Enabled: true,
+	}
+	if nodeConfig.SNI != "" {
+		tlsOptions.ServerName = nodeConfig.SNI
+	}
+	if nodeConfig.AllowInsecure {
+		tlsOptions.Insecure = true
+	}
+
 	inbound := &option.Inbound{
 		Type: "trojan",
 		Tag:  "trojan-in",
@@ -152,9 +163,7 @@ func buildTrojanInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscrip
 			},
 			Users: users,
 			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
-				TLS: &option.InboundTLSOptions{
-					Enabled: true,
-				},
+				TLS: tlsOptions,
 			},
 		},
 	}
@@ -182,6 +191,17 @@ func buildVlessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 	// Convert netip.Addr to badoption.Addr
 	badAddr := badoption.Addr(listenAddr)
 
+	// Build TLS options
+	tlsOptions := &option.InboundTLSOptions{
+		Enabled: true,
+	}
+	if nodeConfig.SNI != "" {
+		tlsOptions.ServerName = nodeConfig.SNI
+	}
+	if nodeConfig.AllowInsecure {
+		tlsOptions.Insecure = true
+	}
+
 	inbound := &option.Inbound{
 		Type: "vless",
 		Tag:  "vless-in",
@@ -192,9 +212,7 @@ func buildVlessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 			},
 			Users: users,
 			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
-				TLS: &option.InboundTLSOptions{
-					Enabled: true,
-				},
+				TLS: tlsOptions,
 			},
 		},
 	}
