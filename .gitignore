@@ -33,3 +33,9 @@ go.work.sum
 CLAUDE.md
 bin/
 backend/
+
+# macOS
+.DS_Store
+
+# Local config
+configs/config.yaml
