@@ -13,6 +13,7 @@ import (
 	"github.com/easayliu/orrisp/internal/config"
 	"github.com/easayliu/orrisp/internal/singbox"
 	"github.com/easayliu/orrisp/internal/stats"
+	"github.com/easayliu/orrisp/internal/util"
 	"github.com/sagernet/sing-box/option"
 	"go.uber.org/zap"
 )
@@ -38,6 +39,10 @@ type NodeService struct {
 	// TLS certificate paths (auto-generated if not configured)
 	certPath string
 	keyPath  string
+
+	// Cached public IP addresses
+	cachedPublicIPv4 string
+	cachedPublicIPv6 string
 }
 
 // NewNodeService creates new node service for a specific node instance
@@ -310,12 +315,50 @@ func (s *NodeService) collectSystemStatus() *api.NodeStatus {
 	// Disk usage
 	diskPercent := s.getDiskUsage()
 
+	// Detect public IP for auto-reporting
+	ipv4, ipv6 := s.getPublicIPs()
+
 	return &api.NodeStatus{
-		CPU:    cpuPercent,
-		Mem:    memPercent,
-		Disk:   diskPercent,
-		Uptime: uptime,
+		CPU:        cpuPercent,
+		Mem:        memPercent,
+		Disk:       diskPercent,
+		Uptime:     uptime,
+		PublicIPv4: ipv4,
+		PublicIPv6: ipv6,
 	}
+}
+
+// getPublicIPs gets the server's public IPv4 and IPv6 addresses with caching.
+func (s *NodeService) getPublicIPs() (ipv4, ipv6 string) {
+	s.mu.RLock()
+	cachedIPv4 := s.cachedPublicIPv4
+	cachedIPv6 := s.cachedPublicIPv6
+	s.mu.RUnlock()
+
+	// Return cached IPs if available (IPs rarely change during runtime)
+	if cachedIPv4 != "" || cachedIPv6 != "" {
+		return cachedIPv4, cachedIPv6
+	}
+
+	// Detect public IPs
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+
+	ipv4, ipv6 = util.GetPublicIPs(ctx)
+
+	s.mu.Lock()
+	s.cachedPublicIPv4 = ipv4
+	s.cachedPublicIPv6 = ipv6
+	s.mu.Unlock()
+
+	if ipv4 != "" {
+		s.logger.Info("Public IPv4 detected", zap.String("ipv4", ipv4))
+	}
+	if ipv6 != "" {
+		s.logger.Info("Public IPv6 detected", zap.String("ipv6", ipv6))
+	}
+
+	return ipv4, ipv6
 }
 
 // getDiskUsage gets disk usage percentage for root filesystem

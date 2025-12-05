@@ -3,7 +3,7 @@ module github.com/easayliu/orrisp
 go 1.24.3
 
 require (
-	github.com/orris-inc/orris/sdk/agent v0.0.0-20251203103858-30da99f74bf2
+	github.com/orris-inc/orris/sdk/agent v0.0.0-20251205104337-6d67ca37c2da
 	github.com/sagernet/sing v0.7.13
 	github.com/sagernet/sing-box v1.12.12
 	go.uber.org/zap v1.27.0
