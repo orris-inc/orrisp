@@ -89,8 +89,10 @@ get_latest_version() {
 # Download binary with retry
 download_binary() {
     local version="$1"
-    local download_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${BINARY_NAME}-${PLATFORM}"
-    local temp_file="/tmp/${BINARY_NAME}.tmp"
+    local archive_name="${BINARY_NAME}-${PLATFORM}.tar.gz"
+    local download_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${archive_name}"
+    local temp_file="/tmp/${archive_name}"
+    local temp_dir="/tmp/${BINARY_NAME}-extract"
 
     print_info "Downloading ${BINARY_NAME} ${version} for ${PLATFORM}..."
 
@@ -101,14 +103,33 @@ download_binary() {
 
         if curl -fL --connect-timeout ${CONNECT_TIMEOUT} --max-time ${DOWNLOAD_TIMEOUT} \
             -o "$temp_file" "$download_url"; then
-            chmod +x "$temp_file"
-            mv "$temp_file" "${INSTALL_DIR}/${BINARY_NAME}"
-            print_info "Binary downloaded successfully"
-            return 0
+            print_info "Extracting binary..."
+            rm -rf "$temp_dir"
+            mkdir -p "$temp_dir"
+
+            if tar -xzf "$temp_file" -C "$temp_dir"; then
+                # Find the binary in extracted files (may be named orrisp or orrisp-platform)
+                local extracted_binary=$(find "$temp_dir" -name "${BINARY_NAME}*" -type f | head -1)
+                if [ -z "$extracted_binary" ]; then
+                    print_error "Binary not found in archive"
+                    rm -rf "$temp_file" "$temp_dir"
+                    exit 1
+                fi
+
+                chmod +x "$extracted_binary"
+                mv "$extracted_binary" "${INSTALL_DIR}/${BINARY_NAME}"
+                rm -rf "$temp_file" "$temp_dir"
+                print_info "Binary downloaded and extracted successfully"
+                return 0
+            else
+                print_warn "Failed to extract archive"
+                rm -rf "$temp_file" "$temp_dir"
+            fi
         fi
 
         print_warn "Download attempt $attempt failed"
         rm -f "$temp_file"
+        rm -rf "$temp_dir"
         sleep 2
     done
 
