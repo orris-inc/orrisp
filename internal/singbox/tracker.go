@@ -133,7 +133,8 @@ type countingConn struct {
 func (c *countingConn) Read(b []byte) (n int, err error) {
 	n, err = c.Conn.Read(b)
 	if n > 0 {
-		c.download.Add(int64(n))
+		// Read from client = user upload
+		c.upload.Add(int64(n))
 	}
 	return
 }
@@ -141,7 +142,8 @@ func (c *countingConn) Read(b []byte) (n int, err error) {
 func (c *countingConn) Write(b []byte) (n int, err error) {
 	n, err = c.Conn.Write(b)
 	if n > 0 {
-		c.upload.Add(int64(n))
+		// Write to client = user download
+		c.download.Add(int64(n))
 	}
 	return
 }
@@ -177,7 +179,8 @@ type countingPacketConn struct {
 func (c *countingPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
 	destination, err = c.PacketConn.ReadPacket(buffer)
 	if err == nil {
-		c.download.Add(int64(buffer.Len()))
+		// Read from client = user upload
+		c.upload.Add(int64(buffer.Len()))
 	}
 	return
 }
@@ -186,7 +189,8 @@ func (c *countingPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socks
 	size := buffer.Len()
 	err := c.PacketConn.WritePacket(buffer, destination)
 	if err == nil {
-		c.upload.Add(int64(size))
+		// Write to client = user download
+		c.download.Add(int64(size))
 	}
 	return err
 }
