@@ -41,6 +41,7 @@ type SyncConfig struct {
 // LogConfig log configuration
 type LogConfig struct {
 	Level  string `yaml:"level"`  // debug, info, warn, error
+	Format string `yaml:"format"` // json or text (default: json)
 	Output string `yaml:"output"` // stdout or file path
 }
 
@@ -58,6 +59,7 @@ func DefaultConfig() *Config {
 		},
 		Log: LogConfig{
 			Level:  "info",
+			Format: "json",
 			Output: "stdout",
 		},
 	}

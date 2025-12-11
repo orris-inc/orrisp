@@ -3,22 +3,22 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/easayliu/orrisp/internal/config"
-	"go.uber.org/zap"
 )
 
 // MultiNodeService manages multiple node services
 type MultiNodeService struct {
 	config   *config.Config
 	services []*NodeService
-	logger   *zap.Logger
+	logger   *slog.Logger
 	mu       sync.RWMutex
 }
 
 // NewMultiNodeService creates a new multi-node service manager
-func NewMultiNodeService(cfg *config.Config, logger *zap.Logger) (*MultiNodeService, error) {
+func NewMultiNodeService(cfg *config.Config, logger *slog.Logger) (*MultiNodeService, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
@@ -45,7 +45,7 @@ func NewMultiNodeService(cfg *config.Config, logger *zap.Logger) (*MultiNodeServ
 	}
 
 	logger.Info("MultiNodeService created",
-		zap.Int("node_count", len(services)),
+		slog.Int("node_count", len(services)),
 	)
 
 	return &MultiNodeService{
@@ -61,7 +61,7 @@ func (m *MultiNodeService) Start(ctx context.Context) error {
 	defer m.mu.Unlock()
 
 	m.logger.Info("Starting multi-node service...",
-		zap.Int("node_count", len(m.services)),
+		slog.Int("node_count", len(m.services)),
 	)
 
 	var wg sync.WaitGroup
@@ -96,7 +96,7 @@ func (m *MultiNodeService) Start(ctx context.Context) error {
 	}
 
 	m.logger.Info("Multi-node service started successfully",
-		zap.Int("node_count", len(m.services)),
+		slog.Int("node_count", len(m.services)),
 	)
 	return nil
 }
@@ -107,7 +107,7 @@ func (m *MultiNodeService) Stop() error {
 	defer m.mu.Unlock()
 
 	m.logger.Info("Stopping multi-node service...",
-		zap.Int("node_count", len(m.services)),
+		slog.Int("node_count", len(m.services)),
 	)
 
 	var wg sync.WaitGroup
@@ -134,7 +134,7 @@ func (m *MultiNodeService) Stop() error {
 
 	if len(errors) > 0 {
 		m.logger.Warn("Some nodes failed to stop",
-			zap.Int("failed_count", len(errors)),
+			slog.Int("failed_count", len(errors)),
 		)
 		return fmt.Errorf("failed to stop %d node(s): %v", len(errors), errors[0])
 	}

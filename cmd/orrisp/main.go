@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/easayliu/orrisp/internal/config"
 	"github.com/easayliu/orrisp/internal/service"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -32,18 +33,20 @@ func main() {
 	}
 
 	// Initialize logger
-	logger, err := initLogger(cfg)
+	logger, logFile, err := initLogger(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	// Get node instances
 	instances := cfg.GetNodeInstances()
-	logger.Info("Configuration loaded successfully",
-		zap.String("api_base_url", cfg.API.BaseURL),
-		zap.Int("node_count", len(instances)),
+	logger.Info("configuration loaded",
+		slog.String("api_base_url", cfg.API.BaseURL),
+		slog.Int("node_count", len(instances)),
 	)
 
 	// Create context
@@ -53,94 +56,118 @@ func main() {
 	// Create and start multi-node service
 	multiNodeService, err := service.NewMultiNodeService(cfg, logger)
 	if err != nil {
-		logger.Fatal("Failed to create multi-node service", zap.Error(err))
+		logger.Error("failed to create multi-node service", errAttr(err))
+		os.Exit(1)
 	}
 
 	// Start all node services
 	if err := multiNodeService.Start(ctx); err != nil {
-		logger.Fatal("Failed to start multi-node service", zap.Error(err))
+		logger.Error("failed to start multi-node service", errAttr(err))
+		os.Exit(1)
 	}
 
 	// Wait for signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	logger.Info("Node service is running, press Ctrl+C to exit...",
-		zap.Int("node_count", len(instances)),
+	logger.Info("service started",
+		slog.Int("node_count", len(instances)),
 	)
 
 	// Block waiting for signal
 	sig := <-sigChan
-	logger.Info("Received shutdown signal", zap.String("signal", sig.String()))
+	logger.Info("received shutdown signal", slog.String("signal", sig.String()))
 
 	// Cancel context
 	cancel()
 
 	// Stop all services
 	if err := multiNodeService.Stop(); err != nil {
-		logger.Error("Failed to stop multi-node service", zap.Error(err))
+		logger.Error("failed to stop multi-node service", errAttr(err))
 		os.Exit(1)
 	}
 
-	logger.Info("Node service has been gracefully shut down")
+	logger.Info("service stopped gracefully")
 }
 
-// initLogger initializes the logger
-func initLogger(cfg *config.Config) (*zap.Logger, error) {
+// errAttr creates a standardized error attribute for slog
+// Best practice: use consistent key name "err" for errors
+func errAttr(err error) slog.Attr {
+	return slog.Any("err", err)
+}
+
+// initLogger initializes the slog logger following best practices:
+// - JSON format for production (machine-readable, easy to parse)
+// - Text format for development (human-readable)
+// - Consistent timestamp format (RFC3339)
+// - Service metadata in every log entry
+func initLogger(cfg *config.Config) (*slog.Logger, *os.File, error) {
 	// Parse log level
-	var level zapcore.Level
+	var level slog.Level
 	switch cfg.Log.Level {
 	case "debug":
-		level = zapcore.DebugLevel
+		level = slog.LevelDebug
 	case "info":
-		level = zapcore.InfoLevel
+		level = slog.LevelInfo
 	case "warn":
-		level = zapcore.WarnLevel
+		level = slog.LevelWarn
 	case "error":
-		level = zapcore.ErrorLevel
+		level = slog.LevelError
 	default:
-		level = zapcore.InfoLevel
-	}
-
-	// Configure encoder
-	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:        "time",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		MessageKey:     "msg",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.CapitalColorLevelEncoder, // Colorized log level
-		EncodeTime:     zapcore.ISO8601TimeEncoder,
-		EncodeDuration: zapcore.SecondsDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
+		level = slog.LevelInfo
 	}
 
 	// Configure output
-	var writer zapcore.WriteSyncer
+	var writer io.Writer
+	var logFile *os.File
 	if cfg.Log.Output == "stdout" || cfg.Log.Output == "" {
-		writer = zapcore.AddSync(os.Stdout)
+		writer = os.Stdout
 	} else {
-		// Output to file
-		file, err := os.OpenFile(cfg.Log.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		var err error
+		logFile, err = os.OpenFile(cfg.Log.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open log file: %w", err)
+			return nil, nil, fmt.Errorf("failed to open log file: %w", err)
 		}
-		writer = zapcore.AddSync(file)
-		// If output to file, don't use colorized encoding
-		encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
+		writer = logFile
 	}
 
-	// Create core
-	core := zapcore.NewCore(
-		zapcore.NewConsoleEncoder(encoderConfig),
-		writer,
-		level,
+	// Handler options with custom attribute replacement
+	opts := &slog.HandlerOptions{
+		Level: level,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			// Use RFC3339 format for timestamps
+			if a.Key == slog.TimeKey {
+				if t, ok := a.Value.Any().(time.Time); ok {
+					a.Value = slog.StringValue(t.Format(time.RFC3339))
+				}
+			}
+			// Shorten level key values for JSON
+			if a.Key == slog.LevelKey {
+				if lvl, ok := a.Value.Any().(slog.Level); ok {
+					a.Value = slog.StringValue(lvl.String())
+				}
+			}
+			return a
+		},
+	}
+
+	// Create handler based on format
+	var handler slog.Handler
+	if cfg.Log.Format == "text" {
+		handler = slog.NewTextHandler(writer, opts)
+	} else {
+		// Default to JSON format (best practice for production)
+		handler = slog.NewJSONHandler(writer, opts)
+	}
+
+	// Add service metadata to all log entries
+	logger := slog.New(handler).With(
+		slog.String("service", "orrisp"),
+		slog.String("version", version),
 	)
 
-	// Create logger
-	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(0))
+	// Set as default logger for standard library compatibility
+	slog.SetDefault(logger)
 
-	return logger, nil
+	return logger, logFile, nil
 }

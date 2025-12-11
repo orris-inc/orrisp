@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sync"
 	"syscall"
@@ -15,7 +16,6 @@ import (
 	"github.com/easayliu/orrisp/internal/stats"
 	"github.com/easayliu/orrisp/internal/util"
 	"github.com/sagernet/sing-box/option"
-	"go.uber.org/zap"
 )
 
 // NodeService node service
@@ -26,7 +26,7 @@ type NodeService struct {
 	singboxService *singbox.Service
 	statsClient    *stats.Client
 	trafficTracker *singbox.TrafficTracker
-	logger         *zap.Logger
+	logger         *slog.Logger
 
 	mu           sync.RWMutex
 	nodeConfig   *api.NodeConfig
@@ -46,7 +46,7 @@ type NodeService struct {
 }
 
 // NewNodeService creates new node service for a specific node instance
-func NewNodeService(cfg *config.Config, nodeInstance config.NodeInstance, logger *zap.Logger) (*NodeService, error) {
+func NewNodeService(cfg *config.Config, nodeInstance config.NodeInstance, logger *slog.Logger) (*NodeService, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
@@ -55,7 +55,7 @@ func NewNodeService(cfg *config.Config, nodeInstance config.NodeInstance, logger
 	}
 
 	// Create logger with node ID context
-	nodeLogger := logger.With(zap.Int("node_id", nodeInstance.ID))
+	nodeLogger := logger.With(slog.Int("node_id", nodeInstance.ID))
 
 	// Create API client with functional options
 	apiClient := api.NewClient(
@@ -136,7 +136,7 @@ func (s *NodeService) Stop() error {
 	// Stop sing-box
 	if s.singboxService != nil {
 		if err := s.singboxService.Close(); err != nil {
-			s.logger.Error("Failed to stop sing-box", zap.Error(err))
+			s.logger.Error("Failed to stop sing-box", slog.Any("err", err))
 		}
 	}
 
@@ -161,11 +161,11 @@ func (s *NodeService) fetchNodeConfig() error {
 	s.mu.Unlock()
 
 	s.logger.Info("Node configuration fetched successfully",
-		zap.Int("node_id", nodeConfig.NodeID),
-		zap.String("protocol", nodeConfig.Protocol),
-		zap.String("host", nodeConfig.ServerHost),
-		zap.Int("port", nodeConfig.ServerPort),
-		zap.String("method", nodeConfig.EncryptionMethod),
+		slog.Int("node_id", nodeConfig.NodeID),
+		slog.String("protocol", nodeConfig.Protocol),
+		slog.String("host", nodeConfig.ServerHost),
+		slog.Int("port", nodeConfig.ServerPort),
+		slog.String("method", nodeConfig.EncryptionMethod),
 	)
 
 	return nil
@@ -193,15 +193,15 @@ func (s *NodeService) syncUsers() error {
 
 	newCount := len(users)
 	s.logger.Info("User list synchronized successfully",
-		zap.Int("old_count", oldCount),
-		zap.Int("new_count", newCount),
+		slog.Int("old_count", oldCount),
+		slog.Int("new_count", newCount),
 	)
 
 	// If user list changed, reload sing-box
 	if oldCount != newCount && s.singboxService != nil {
 		s.logger.Info("User list changed, reloading sing-box...")
 		if err := s.reloadSingbox(); err != nil {
-			s.logger.Error("Failed to reload sing-box", zap.Error(err))
+			s.logger.Error("Failed to reload sing-box", slog.Any("err", err))
 			return err
 		}
 	}
@@ -231,9 +231,9 @@ func (s *NodeService) reportTraffic() error {
 	// Log detailed traffic data for debugging
 	for _, item := range trafficItems {
 		s.logger.Info("Traffic collected",
-			zap.Int("subscription_id", item.SubscriptionID),
-			zap.Int64("upload", item.Upload),
-			zap.Int64("download", item.Download),
+			slog.Int("subscription_id", item.SubscriptionID),
+			slog.Int64("upload", item.Upload),
+			slog.Int64("download", item.Download),
 		)
 	}
 
@@ -242,13 +242,13 @@ func (s *NodeService) reportTraffic() error {
 
 	result, err := s.apiClient.ReportTraffic(ctx, trafficItems)
 	if err != nil {
-		s.logger.Error("Failed to report traffic", zap.Error(err))
+		s.logger.Error("Failed to report traffic", slog.Any("err", err))
 		return err
 	}
 
 	s.logger.Info("Traffic data reported successfully",
-		zap.Int("count", len(trafficItems)),
-		zap.Int("updated", result.SubscriptionsUpdated),
+		slog.Int("count", len(trafficItems)),
+		slog.Int("updated", result.SubscriptionsUpdated),
 	)
 	return nil
 }
@@ -264,7 +264,7 @@ func (s *NodeService) reportStatus() error {
 	defer cancel()
 
 	if err := s.apiClient.UpdateStatus(ctx, status); err != nil {
-		s.logger.Error("Failed to report node status", zap.Error(err))
+		s.logger.Error("Failed to report node status", slog.Any("err", err))
 		return err
 	}
 
@@ -290,11 +290,11 @@ func (s *NodeService) reportOnline() error {
 
 	result, err := s.apiClient.UpdateOnlineSubscriptions(ctx, onlineUsers)
 	if err != nil {
-		s.logger.Error("Failed to report online users", zap.Error(err))
+		s.logger.Error("Failed to report online users", slog.Any("err", err))
 		return err
 	}
 
-	s.logger.Debug("Online users reported successfully", zap.Int("count", result.OnlineCount))
+	s.logger.Debug("Online users reported successfully", slog.Int("count", result.OnlineCount))
 	return nil
 }
 
@@ -352,10 +352,10 @@ func (s *NodeService) getPublicIPs() (ipv4, ipv6 string) {
 	s.mu.Unlock()
 
 	if ipv4 != "" {
-		s.logger.Info("Public IPv4 detected", zap.String("ipv4", ipv4))
+		s.logger.Info("Public IPv4 detected", slog.String("ipv4", ipv4))
 	}
 	if ipv6 != "" {
-		s.logger.Info("Public IPv6 detected", zap.String("ipv6", ipv6))
+		s.logger.Info("Public IPv6 detected", slog.String("ipv6", ipv6))
 	}
 
 	return ipv4, ipv6
@@ -365,7 +365,7 @@ func (s *NodeService) getPublicIPs() (ipv4, ipv6 string) {
 func (s *NodeService) getDiskUsage() string {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs("/", &stat); err != nil {
-		s.logger.Debug("Failed to get disk usage", zap.Error(err))
+		s.logger.Debug("Failed to get disk usage", slog.Any("err", err))
 		return "0%"
 	}
 
@@ -456,13 +456,13 @@ func (s *NodeService) generateSingboxOptions() (*option.Options, error) {
 	// Debug: log generated config
 	hasClashAPI := options.Experimental != nil && options.Experimental.ClashAPI != nil
 	s.logger.Info("Generated sing-box config",
-		zap.String("listen_addr", nodeConfig.ServerHost),
-		zap.Int("listen_port", nodeConfig.ServerPort),
-		zap.String("protocol", nodeConfig.Protocol),
-		zap.String("method", nodeConfig.EncryptionMethod),
-		zap.Int("inbound_count", len(options.Inbounds)),
-		zap.Int("user_count", len(s.currentUsers)),
-		zap.Bool("has_clash_api", hasClashAPI),
+		slog.String("listen_addr", nodeConfig.ServerHost),
+		slog.Int("listen_port", nodeConfig.ServerPort),
+		slog.String("protocol", nodeConfig.Protocol),
+		slog.String("method", nodeConfig.EncryptionMethod),
+		slog.Int("inbound_count", len(options.Inbounds)),
+		slog.Int("user_count", len(s.currentUsers)),
+		slog.Bool("has_clash_api", hasClashAPI),
 	)
 
 	// If using trojan or vless protocol, configure TLS certificate
@@ -507,15 +507,15 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 		s.certPath = s.nodeInstance.CertPath
 		s.keyPath = s.nodeInstance.KeyPath
 		s.logger.Info("Using configured TLS certificate",
-			zap.String("cert_path", s.certPath),
-			zap.String("key_path", s.keyPath),
+			slog.String("cert_path", s.certPath),
+			slog.String("key_path", s.keyPath),
 		)
 		return s.certPath, s.keyPath, nil
 	}
 
 	// Generate self-signed certificate (use node ID in path for multi-node support)
 	certDir := fmt.Sprintf("/tmp/orrisp/certs/node-%d", s.nodeInstance.ID)
-	s.logger.Info("Generating self-signed TLS certificate", zap.String("sni", sni))
+	s.logger.Info("Generating self-signed TLS certificate", slog.String("sni", sni))
 	selfSigned, err := cert.GenerateSelfSigned(certDir, sni)
 	if err != nil {
 		return "", "", err
@@ -524,8 +524,8 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 	s.certPath = selfSigned.CertPath
 	s.keyPath = selfSigned.KeyPath
 	s.logger.Info("Self-signed TLS certificate generated",
-		zap.String("cert_path", s.certPath),
-		zap.String("key_path", s.keyPath),
+		slog.String("cert_path", s.certPath),
+		slog.String("key_path", s.keyPath),
 	)
 
 	return s.certPath, s.keyPath, nil
@@ -570,21 +570,21 @@ func (s *NodeService) scheduleTask(name string, interval time.Duration, task fun
 	defer ticker.Stop()
 
 	s.logger.Info("Scheduled task started",
-		zap.String("name", name),
-		zap.Duration("interval", interval),
+		slog.String("name", name),
+		slog.Duration("interval", interval),
 	)
 
 	for {
 		select {
 		case <-s.ctx.Done():
-			s.logger.Info("Scheduled task stopped", zap.String("name", name))
+			s.logger.Info("Scheduled task stopped", slog.String("name", name))
 			return
 
 		case <-ticker.C:
 			if err := task(); err != nil {
 				s.logger.Error("Scheduled task execution failed",
-					zap.String("name", name),
-					zap.Error(err),
+					slog.String("name", name),
+					slog.Any("err", err),
 				)
 			}
 		}

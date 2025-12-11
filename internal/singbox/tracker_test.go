@@ -2,19 +2,20 @@ package singbox
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/easayliu/orrisp/internal/stats"
 	"github.com/sagernet/sing-box/adapter"
-	"go.uber.org/zap"
 )
 
 func TestTrafficTracker(t *testing.T) {
 	// Create stats client and tracker
 	statsClient := stats.NewClient()
-	logger := zap.NewNop()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewTrafficTracker(statsClient, logger)
 
 	// Set user mapping
@@ -42,14 +43,14 @@ func TestTrafficTracker(t *testing.T) {
 		server.Write([]byte("response data"))
 	}()
 
-	// Write (upload)
+	// Write to server (proxy writes to client = user download)
 	n, err := wrappedConn.Write(testData)
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 	t.Logf("Written %d bytes", n)
 
-	// Read (download)
+	// Read from server (proxy reads from client = user upload)
 	buf := make([]byte, 1024)
 	n, err = wrappedConn.Read(buf)
 	if err != nil {
@@ -91,7 +92,7 @@ func TestTrafficTracker(t *testing.T) {
 
 func TestTrafficTrackerUnknownUser(t *testing.T) {
 	statsClient := stats.NewClient()
-	logger := zap.NewNop()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewTrafficTracker(statsClient, logger)
 
 	// No user mapping set
@@ -113,7 +114,7 @@ func TestTrafficTrackerUnknownUser(t *testing.T) {
 
 func TestTrafficTrackerEmptyUser(t *testing.T) {
 	statsClient := stats.NewClient()
-	logger := zap.NewNop()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tracker := NewTrafficTracker(statsClient, logger)
 
 	server, client := net.Pipe()

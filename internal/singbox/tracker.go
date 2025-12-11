@@ -2,6 +2,7 @@ package singbox
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -11,19 +12,18 @@ import (
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
-	"go.uber.org/zap"
 )
 
 // TrafficTracker implements adapter.ConnectionTracker for traffic statistics
 type TrafficTracker struct {
 	statsClient *stats.Client
-	logger      *zap.Logger
+	logger      *slog.Logger
 	mu          sync.RWMutex
 	userMap     map[string]int // username -> subscription_id
 }
 
 // NewTrafficTracker creates a new traffic tracker
-func NewTrafficTracker(statsClient *stats.Client, logger *zap.Logger) *TrafficTracker {
+func NewTrafficTracker(statsClient *stats.Client, logger *slog.Logger) *TrafficTracker {
 	return &TrafficTracker{
 		statsClient: statsClient,
 		logger:      logger,
@@ -37,7 +37,7 @@ func (t *TrafficTracker) SetUserMap(userMap map[string]int) {
 	defer t.mu.Unlock()
 	t.userMap = userMap
 	t.logger.Debug("User map updated",
-		zap.Int("user_count", len(userMap)),
+		slog.Int("user_count", len(userMap)),
 	)
 }
 
@@ -66,16 +66,16 @@ func (t *TrafficTracker) RoutedConnection(
 	subID, ok := t.getSubscriptionID(username)
 	if !ok {
 		t.logger.Warn("User not found in mapping",
-			zap.String("user", username),
+			slog.String("user", username),
 		)
 		return conn
 	}
 
 	t.logger.Debug("Connection tracked",
-		zap.String("user", username),
-		zap.Int("subscription_id", subID),
-		zap.String("inbound", metadata.Inbound),
-		zap.String("destination", metadata.Destination.String()),
+		slog.String("user", username),
+		slog.Int("subscription_id", subID),
+		slog.String("inbound", metadata.Inbound),
+		slog.String("destination", metadata.Destination.String()),
 	)
 	return &countingConn{
 		Conn:           conn,
@@ -101,15 +101,15 @@ func (t *TrafficTracker) RoutedPacketConnection(
 	subID, ok := t.getSubscriptionID(username)
 	if !ok {
 		t.logger.Warn("User not found in mapping",
-			zap.String("user", username),
+			slog.String("user", username),
 		)
 		return conn
 	}
 
 	t.logger.Debug("Packet connection tracked",
-		zap.String("user", username),
-		zap.Int("subscription_id", subID),
-		zap.String("inbound", metadata.Inbound),
+		slog.String("user", username),
+		slog.Int("subscription_id", subID),
+		slog.String("inbound", metadata.Inbound),
 	)
 	return &countingPacketConn{
 		PacketConn:     conn,
@@ -124,7 +124,7 @@ type countingConn struct {
 	net.Conn
 	statsClient    *stats.Client
 	subscriptionID int
-	logger         *zap.Logger
+	logger         *slog.Logger
 	upload         atomic.Int64
 	download       atomic.Int64
 	closed         atomic.Bool
@@ -155,9 +155,9 @@ func (c *countingConn) Close() error {
 		download := c.download.Load()
 		if upload > 0 || download > 0 {
 			c.logger.Debug("Connection closed",
-				zap.Int("subscription_id", c.subscriptionID),
-				zap.Int64("upload", upload),
-				zap.Int64("download", download),
+				slog.Int("subscription_id", c.subscriptionID),
+				slog.Int64("upload", upload),
+				slog.Int64("download", download),
 			)
 			c.statsClient.RecordTraffic(c.subscriptionID, upload, download)
 		}
@@ -170,7 +170,7 @@ type countingPacketConn struct {
 	N.PacketConn
 	statsClient    *stats.Client
 	subscriptionID int
-	logger         *zap.Logger
+	logger         *slog.Logger
 	upload         atomic.Int64
 	download       atomic.Int64
 	closed         atomic.Bool
@@ -202,9 +202,9 @@ func (c *countingPacketConn) Close() error {
 		download := c.download.Load()
 		if upload > 0 || download > 0 {
 			c.logger.Debug("Packet connection closed",
-				zap.Int("subscription_id", c.subscriptionID),
-				zap.Int64("upload", upload),
-				zap.Int64("download", download),
+				slog.Int("subscription_id", c.subscriptionID),
+				slog.Int64("upload", upload),
+				slog.Int64("download", download),
 			)
 			c.statsClient.RecordTraffic(c.subscriptionID, upload, download)
 		}

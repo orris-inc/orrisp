@@ -3,16 +3,15 @@ package singbox
 import (
 	"bufio"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
-
-	"go.uber.org/zap"
 )
 
-// StderrInterceptor intercepts stderr output and forwards to zap logger
+// StderrInterceptor intercepts stderr output and forwards to slog logger
 type StderrInterceptor struct {
-	logger     *zap.Logger
+	logger     *slog.Logger
 	origStderr *os.File
 	pipeReader *os.File
 	pipeWriter *os.File
@@ -21,7 +20,7 @@ type StderrInterceptor struct {
 }
 
 // NewStderrInterceptor creates a new stderr interceptor
-func NewStderrInterceptor(logger *zap.Logger) (*StderrInterceptor, error) {
+func NewStderrInterceptor(logger *slog.Logger) (*StderrInterceptor, error) {
 	// Create pipe
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -67,7 +66,7 @@ func (i *StderrInterceptor) Stop() {
 	i.pipeReader.Close()
 }
 
-// readLoop reads from pipe and forwards to zap logger
+// readLoop reads from pipe and forwards to slog logger
 func (i *StderrInterceptor) readLoop() {
 	defer i.wg.Done()
 
@@ -76,7 +75,7 @@ func (i *StderrInterceptor) readLoop() {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err != io.EOF {
-				i.logger.Error("failed to read from pipe", zap.Error(err))
+				i.logger.Error("Failed to read from pipe", slog.Any("err", err))
 			}
 			return
 		}

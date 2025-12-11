@@ -3,12 +3,12 @@ package singbox
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
-	"go.uber.org/zap"
 )
 
 // Service sing-box service wrapper, provides start, stop and reload configuration functionality
@@ -24,7 +24,7 @@ type Service struct {
 }
 
 // NewService creates sing-box service instance
-func NewService(options *option.Options, logger *zap.Logger) (*Service, error) {
+func NewService(options *option.Options, logger *slog.Logger) (*Service, error) {
 	if options == nil {
 		return nil, fmt.Errorf("options cannot be nil")
 	}
