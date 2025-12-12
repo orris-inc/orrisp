@@ -195,6 +195,23 @@ func (c *countingPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socks
 	return err
 }
 
+// FrontHeadroom returns the front headroom required by the underlying connection
+// This is critical for protocols like shadowsocks that need to prepend headers
+func (c *countingPacketConn) FrontHeadroom() int {
+	if wrapper, ok := c.PacketConn.(N.FrontHeadroom); ok {
+		return wrapper.FrontHeadroom()
+	}
+	return 0
+}
+
+// RearHeadroom returns the rear headroom required by the underlying connection
+func (c *countingPacketConn) RearHeadroom() int {
+	if wrapper, ok := c.PacketConn.(N.RearHeadroom); ok {
+		return wrapper.RearHeadroom()
+	}
+	return 0
+}
+
 func (c *countingPacketConn) Close() error {
 	if c.closed.CompareAndSwap(false, true) {
 		// Report accumulated traffic when connection closes
