@@ -195,21 +195,11 @@ func (c *countingPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socks
 	return err
 }
 
-// FrontHeadroom returns the front headroom required by the underlying connection
-// This is critical for protocols like shadowsocks that need to prepend headers
-func (c *countingPacketConn) FrontHeadroom() int {
-	if wrapper, ok := c.PacketConn.(N.FrontHeadroom); ok {
-		return wrapper.FrontHeadroom()
-	}
-	return 0
-}
-
-// RearHeadroom returns the rear headroom required by the underlying connection
-func (c *countingPacketConn) RearHeadroom() int {
-	if wrapper, ok := c.PacketConn.(N.RearHeadroom); ok {
-		return wrapper.RearHeadroom()
-	}
-	return 0
+// Upstream returns the underlying connection for headroom calculation traversal
+// This allows sing's CalculateFrontHeadroom to traverse the wrapper chain
+// and correctly calculate buffer space needed for protocol headers (e.g., shadowsocks encryption)
+func (c *countingPacketConn) Upstream() any {
+	return c.PacketConn
 }
 
 func (c *countingPacketConn) Close() error {
