@@ -17,6 +17,9 @@ type (
 	OnlineSubscriptionsResult = agent.OnlineSubscriptionsResult
 )
 
+// ErrUnauthorized is returned when the API returns a 401 status code.
+var ErrUnauthorized = agent.ErrUnauthorized
+
 // Client wraps the SDK agent client.
 type Client = agent.Client
 

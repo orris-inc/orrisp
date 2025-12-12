@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -586,6 +587,13 @@ func (s *NodeService) scheduleTask(name string, interval time.Duration, task fun
 					slog.String("name", name),
 					slog.Any("err", err),
 				)
+
+				// Stop service on authentication failure (401)
+				if errors.Is(err, api.ErrUnauthorized) {
+					s.logger.Error("Authentication failed, stopping service due to invalid token")
+					s.cancel()
+					return
+				}
 			}
 		}
 	}
