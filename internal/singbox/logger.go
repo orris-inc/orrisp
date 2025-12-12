@@ -5,9 +5,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 )
+
+// ansiEscapeRegex matches ANSI escape sequences (color codes, cursor movement, etc.)
+var ansiEscapeRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 // StderrInterceptor intercepts stderr output and forwards to slog logger
 type StderrInterceptor struct {
@@ -91,9 +95,17 @@ func (i *StderrInterceptor) readLoop() {
 	}
 }
 
+// stripAnsiCodes removes ANSI escape sequences from a string
+func stripAnsiCodes(s string) string {
+	return ansiEscapeRegex.ReplaceAllString(s, "")
+}
+
 // parseSingboxLog parses sing-box log format
 // Format: "+0800 2025-12-02 18:36:40 INFO message" or "INFO[0000] message"
 func parseSingboxLog(line string) (level, msg string) {
+	// Remove ANSI color codes first
+	line = stripAnsiCodes(line)
+
 	// Try format: "+0800 2025-12-02 18:36:40 LEVEL message"
 	// Skip timezone and timestamp (first 26 chars approximately)
 	if len(line) > 26 && (line[0] == '+' || line[0] == '-') {
