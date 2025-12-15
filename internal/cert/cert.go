@@ -2,8 +2,7 @@
 package cert
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -29,8 +28,8 @@ func GenerateSelfSigned(dir string, sni string) (*SelfSignedCert, error) {
 		sni = "localhost"
 	}
 
-	// Generate private key
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Generate Ed25519 private key (faster and more secure than ECDSA P-256)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %w", err)
 	}
@@ -62,7 +61,7 @@ func GenerateSelfSigned(dir string, sni string) (*SelfSignedCert, error) {
 	}
 
 	// Create certificate
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, publicKey, privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create certificate: %w", err)
 	}
@@ -92,12 +91,13 @@ func GenerateSelfSigned(dir string, sni string) (*SelfSignedCert, error) {
 	}
 	defer keyFile.Close()
 
-	keyDER, err := x509.MarshalECPrivateKey(privateKey)
+	// Marshal Ed25519 private key to PKCS#8 format
+	keyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal private key: %w", err)
 	}
 
-	if err := pem.Encode(keyFile, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
+	if err := pem.Encode(keyFile, &pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}); err != nil {
 		return nil, fmt.Errorf("failed to write private key: %w", err)
 	}
 
@@ -107,14 +107,43 @@ func GenerateSelfSigned(dir string, sni string) (*SelfSignedCert, error) {
 	}, nil
 }
 
+// isCertValid checks if certificate file is valid and not expired
+func isCertValid(certPath string) bool {
+	// Read certificate file
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return false
+	}
+
+	// Decode PEM block
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return false
+	}
+
+	// Parse certificate
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return false
+	}
+
+	// Check if certificate is expired or will expire in next 30 days
+	now := time.Now()
+	expiryBuffer := 30 * 24 * time.Hour // 30 days
+	return now.After(cert.NotBefore) && now.Add(expiryBuffer).Before(cert.NotAfter)
+}
+
 // EnsureCert ensures certificate files exist at the given paths.
-// If they don't exist, generates self-signed certificates.
+// If they don't exist or are expired, generates self-signed certificates.
 func EnsureCert(certPath, keyPath, sni string) (string, string, error) {
-	// Check if both files exist
+	// Check if both files exist and certificate is valid
 	if certPath != "" && keyPath != "" {
 		if _, err := os.Stat(certPath); err == nil {
 			if _, err := os.Stat(keyPath); err == nil {
-				return certPath, keyPath, nil
+				// Check certificate validity
+				if isCertValid(certPath) {
+					return certPath, keyPath, nil
+				}
 			}
 		}
 	}
@@ -122,7 +151,7 @@ func EnsureCert(certPath, keyPath, sni string) (string, string, error) {
 	// Generate self-signed certificate
 	dir := filepath.Dir(certPath)
 	if dir == "" || dir == "." {
-		dir = "/tmp/orrisp/certs"
+		dir = "/var/lib/orrisp/certs"
 	}
 
 	cert, err := GenerateSelfSigned(dir, sni)

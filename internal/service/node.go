@@ -551,7 +551,8 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 	}
 
 	// Generate self-signed certificate (use node ID in path for multi-node support)
-	certDir := fmt.Sprintf("/tmp/orrisp/certs/node-%d", s.nodeInstance.ID)
+	// Use persistent directory instead of /tmp to survive reboots
+	certDir := fmt.Sprintf("/var/lib/orrisp/certs/node-%d", s.nodeInstance.ID)
 	s.logger.Info("Generating self-signed TLS certificate", slog.String("sni", sni))
 	selfSigned, err := cert.GenerateSelfSigned(certDir, sni)
 	if err != nil {
@@ -563,6 +564,7 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 	s.logger.Info("Self-signed TLS certificate generated",
 		slog.String("cert_path", s.certPath),
 		slog.String("key_path", s.keyPath),
+		slog.String("algorithm", "Ed25519"),
 	)
 
 	return s.certPath, s.keyPath, nil

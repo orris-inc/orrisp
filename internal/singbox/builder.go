@@ -142,9 +142,16 @@ func buildTrojanInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscrip
 	// Convert netip.Addr to badoption.Addr
 	badAddr := badoption.Addr(listenAddr)
 
-	// Build TLS options
+	// Build TLS options with performance optimizations
 	tlsOptions := &option.InboundTLSOptions{
-		Enabled: true,
+		Enabled:    true,
+		MinVersion: "1.3", // Force TLS 1.3 for better performance
+		MaxVersion: "1.3", // Only use TLS 1.3
+		ALPN: []string{ // Application-Layer Protocol Negotiation
+			"h2",       // HTTP/2 for better multiplexing
+			"http/1.1", // HTTP/1.1 fallback
+		},
+		ECH: nil, // Encrypted Client Hello (optional, for privacy)
 	}
 	if nodeConfig.SNI != "" {
 		tlsOptions.ServerName = nodeConfig.SNI
@@ -160,6 +167,10 @@ func buildTrojanInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscrip
 			ListenOptions: option.ListenOptions{
 				Listen:     &badAddr,
 				ListenPort: uint16(nodeConfig.ServerPort),
+				InboundOptions: option.InboundOptions{
+					SniffEnabled:             true,  // Enable sniffing to detect destination domain
+					SniffOverrideDestination: false, // Keep original destination
+				},
 			},
 			Users: users,
 			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
@@ -191,9 +202,16 @@ func buildVlessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 	// Convert netip.Addr to badoption.Addr
 	badAddr := badoption.Addr(listenAddr)
 
-	// Build TLS options
+	// Build TLS options with performance optimizations
 	tlsOptions := &option.InboundTLSOptions{
-		Enabled: true,
+		Enabled:    true,
+		MinVersion: "1.3", // Force TLS 1.3 for better performance
+		MaxVersion: "1.3", // Only use TLS 1.3
+		ALPN: []string{ // Application-Layer Protocol Negotiation
+			"h2",       // HTTP/2 for better multiplexing
+			"http/1.1", // HTTP/1.1 fallback
+		},
+		ECH: nil, // Encrypted Client Hello (optional, for privacy)
 	}
 	if nodeConfig.SNI != "" {
 		tlsOptions.ServerName = nodeConfig.SNI
@@ -209,6 +227,10 @@ func buildVlessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 			ListenOptions: option.ListenOptions{
 				Listen:     &badAddr,
 				ListenPort: uint16(nodeConfig.ServerPort),
+				InboundOptions: option.InboundOptions{
+					SniffEnabled:             true,  // Enable sniffing to detect destination domain
+					SniffOverrideDestination: false, // Keep original destination
+				},
 			},
 			Users: users,
 			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
