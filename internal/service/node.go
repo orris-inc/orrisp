@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"runtime"
 	"sync"
 	"syscall"
@@ -551,9 +552,26 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 	}
 
 	// Generate self-signed certificate (use node ID in path for multi-node support)
-	// Use persistent directory instead of /tmp to survive reboots
-	certDir := fmt.Sprintf("/var/lib/orrisp/certs/node-%d", s.nodeInstance.ID)
-	s.logger.Info("Generating self-signed TLS certificate", slog.String("sni", sni))
+	// Try persistent directory first, fallback to temporary directory if needed
+	persistentDir := fmt.Sprintf("/var/lib/orrisp/certs/node-%d", s.nodeInstance.ID)
+	tempDir := fmt.Sprintf("/tmp/orrisp/certs/node-%d", s.nodeInstance.ID)
+
+	// Try persistent directory first
+	certDir := persistentDir
+	if err := os.MkdirAll(certDir, 0700); err != nil {
+		// Fallback to temporary directory
+		s.logger.Warn("Failed to create persistent cert directory, using temporary directory",
+			slog.String("persistent_dir", persistentDir),
+			slog.String("temp_dir", tempDir),
+			slog.Any("err", err),
+		)
+		certDir = tempDir
+	}
+
+	s.logger.Info("Generating self-signed TLS certificate",
+		slog.String("sni", sni),
+		slog.String("cert_dir", certDir),
+	)
 	selfSigned, err := cert.GenerateSelfSigned(certDir, sni)
 	if err != nil {
 		return "", "", err
