@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/include"
@@ -21,6 +22,7 @@ type Service struct {
 	cancel      context.CancelFunc
 	interceptor *StderrInterceptor
 	tracker     *TrafficTracker
+	logger      *slog.Logger
 }
 
 // NewService creates sing-box service instance
@@ -64,6 +66,7 @@ func NewService(options *option.Options, logger *slog.Logger) (*Service, error) 
 		ctx:         ctx,
 		cancel:      cancel,
 		interceptor: interceptor,
+		logger:      logger,
 	}, nil
 }
 
@@ -123,58 +126,128 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// Reload reloads configuration
-// Implements configuration reload by closing current instance and creating new instance with new config
+// Reload reloads configuration with graceful instance swap
+// Implements zero-downtime reload by creating new instance first, then swapping
 func (s *Service) Reload(options *option.Options) error {
 	if options == nil {
 		return fmt.Errorf("options cannot be nil")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	reloadStart := time.Now()
+	if s.logger != nil {
+		s.logger.Info("Starting graceful reload...")
+	}
 
-	// Close current instance (don't use Close method to avoid double locking)
-	if s.box != nil {
-		if err := s.box.Close(); err != nil {
-			return fmt.Errorf("failed to close current instance: %w", err)
+	// Step 1: Create new instance WITHOUT holding lock
+	// This is the most time-consuming operation and doesn't need to block traffic
+	createStart := time.Now()
+
+	// Create new context with registries
+	newCtx, newCancel := context.WithCancel(context.Background())
+	newCtx = include.Context(newCtx)
+
+	// Create new instance
+	newInstance, err := box.New(box.Options{
+		Context: newCtx,
+		Options: *options,
+	})
+	if err != nil {
+		newCancel()
+		return fmt.Errorf("failed to create new sing-box instance: %w", err)
+	}
+
+	if s.logger != nil {
+		s.logger.Debug("New instance created",
+			slog.Duration("create_duration", time.Since(createStart)),
+		)
+	}
+
+	// Step 2: Register tracker and start new instance (still no lock)
+	startStart := time.Now()
+
+	// Get tracker under read lock
+	s.mu.RLock()
+	tracker := s.tracker
+	s.mu.RUnlock()
+
+	// Register traffic tracker to router if set
+	if tracker != nil {
+		newInstance.Router().AppendTracker(tracker)
+	}
+
+	// Start new instance
+	if err := newInstance.Start(); err != nil {
+		newCancel()
+		return fmt.Errorf("failed to start new sing-box instance: %w", err)
+	}
+
+	if s.logger != nil {
+		s.logger.Debug("New instance started",
+			slog.Duration("start_duration", time.Since(startStart)),
+		)
+	}
+
+	// Step 3: Quick swap - MINIMAL lock time
+	// This is the only operation that blocks incoming connections
+	swapStart := time.Now()
+
+	s.mu.Lock()
+	oldBox := s.box
+	oldCancel := s.cancel
+
+	s.box = newInstance
+	s.options = options
+	s.ctx = newCtx
+	s.cancel = newCancel
+	s.mu.Unlock()
+
+	if s.logger != nil {
+		s.logger.Debug("Instance swap completed",
+			slog.Duration("swap_duration", time.Since(swapStart)),
+		)
+	}
+
+	// Step 4: Gracefully shutdown old instance in background
+	// Give existing connections time to complete
+	if oldBox != nil {
+		go s.gracefulShutdown(oldBox, oldCancel)
+	}
+
+	if s.logger != nil {
+		s.logger.Info("Graceful reload completed",
+			slog.Duration("total_duration", time.Since(reloadStart)),
+		)
+	}
+
+	return nil
+}
+
+// gracefulShutdown closes old instance with grace period for existing connections
+func (s *Service) gracefulShutdown(oldBox *box.Box, oldCancel context.CancelFunc) {
+	shutdownTimeout := 30 * time.Second
+
+	if s.logger != nil {
+		s.logger.Debug("Starting graceful shutdown of old instance",
+			slog.Duration("timeout", shutdownTimeout),
+		)
+	}
+
+	// Wait briefly for existing connections to finish
+	time.Sleep(5 * time.Second)
+
+	// Close old instance
+	if err := oldBox.Close(); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("Error closing old instance", slog.Any("err", err))
 		}
 	}
 
 	// Cancel old context
-	if s.cancel != nil {
-		s.cancel()
+	if oldCancel != nil {
+		oldCancel()
 	}
 
-	// Create new context with registries
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx = include.Context(ctx)
-
-	// Create new instance
-	instance, err := box.New(box.Options{
-		Context: ctx,
-		Options: *options,
-	})
-	if err != nil {
-		cancel()
-		return fmt.Errorf("failed to create new sing-box instance: %w", err)
+	if s.logger != nil {
+		s.logger.Debug("Old instance shutdown completed")
 	}
-
-	// Register traffic tracker to router if set
-	if s.tracker != nil {
-		instance.Router().AppendTracker(s.tracker)
-	}
-
-	// Start new instance
-	if err := instance.Start(); err != nil {
-		cancel()
-		return fmt.Errorf("failed to start new sing-box instance: %w", err)
-	}
-
-	// Update service state
-	s.box = instance
-	s.options = options
-	s.ctx = ctx
-	s.cancel = cancel
-
-	return nil
 }

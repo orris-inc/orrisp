@@ -185,29 +185,65 @@ func (s *NodeService) syncUsers() error {
 	}
 
 	s.mu.Lock()
-	oldCount := len(s.currentUsers)
+	oldUsers := s.currentUsers
 	s.currentUsers = users
 	s.mu.Unlock()
 
 	// Update traffic tracker user mapping
 	s.updateUserMap(users)
 
-	newCount := len(users)
 	s.logger.Info("User list synchronized successfully",
-		slog.Int("old_count", oldCount),
-		slog.Int("new_count", newCount),
+		slog.Int("old_count", len(oldUsers)),
+		slog.Int("new_count", len(users)),
 	)
 
-	// If user list changed, reload sing-box
-	if oldCount != newCount && s.singboxService != nil {
-		s.logger.Info("User list changed, reloading sing-box...")
+	// Check if user list actually changed (compare content, not just count)
+	if s.usersChanged(oldUsers, users) && s.singboxService != nil {
+		s.logger.Info("User list changed, reloading sing-box...",
+			slog.Int("old_users", len(oldUsers)),
+			slog.Int("new_users", len(users)),
+		)
 		if err := s.reloadSingbox(); err != nil {
 			s.logger.Error("Failed to reload sing-box", slog.Any("err", err))
 			return err
 		}
+	} else {
+		s.logger.Debug("User list unchanged, skipping reload")
 	}
 
 	return nil
+}
+
+// usersChanged checks if the user list has actually changed
+// Returns true if users are different, false if they are the same
+func (s *NodeService) usersChanged(oldUsers, newUsers []api.Subscription) bool {
+	// Different lengths means definitely changed
+	if len(oldUsers) != len(newUsers) {
+		return true
+	}
+
+	// Build map of old users for efficient lookup
+	oldMap := make(map[string]api.Subscription, len(oldUsers))
+	for _, user := range oldUsers {
+		oldMap[user.Name] = user
+	}
+
+	// Check if any new user is different or missing
+	for _, newUser := range newUsers {
+		oldUser, exists := oldMap[newUser.Name]
+		if !exists {
+			// New user added
+			return true
+		}
+		// Check if user details changed
+		if oldUser.SubscriptionID != newUser.SubscriptionID ||
+			oldUser.Password != newUser.Password {
+			return true
+		}
+	}
+
+	// All users are the same
+	return false
 }
 
 // updateUserMap updates the traffic tracker's user mapping
