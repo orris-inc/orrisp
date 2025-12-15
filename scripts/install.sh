@@ -13,6 +13,7 @@ SERVICE_NAME="orrisp"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/orrisp"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
+CERT_DIR="/var/lib/orrisp/certs"
 GITHUB_REPO="orris-inc/orrisp"
 DOWNLOAD_TIMEOUT=120
 CONNECT_TIMEOUT=10
@@ -191,6 +192,22 @@ EOF
     print_info "Configuration file created at $CONFIG_FILE"
 }
 
+# Setup certificate directory
+setup_cert_directory() {
+    print_info "Setting up certificate directory..."
+
+    # Create certificate directory with proper permissions
+    if mkdir -p "$CERT_DIR" 2>/dev/null; then
+        chmod 700 "$CERT_DIR"
+        print_info "Certificate directory created at $CERT_DIR"
+        print_info "Certificates will be persisted across restarts"
+    else
+        print_warn "Failed to create persistent certificate directory at $CERT_DIR"
+        print_warn "Certificates will be stored in /tmp (not persistent across reboots)"
+        print_warn "This is normal if /var/lib is read-only. Service will use fallback directory."
+    fi
+}
+
 # Create systemd service
 create_service() {
     print_info "Creating systemd service..."
@@ -213,7 +230,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=${CONFIG_DIR}
+ReadWritePaths=${CONFIG_DIR} ${CERT_DIR}
 
 [Install]
 WantedBy=multi-user.target
@@ -324,6 +341,9 @@ install() {
     # Create configuration
     create_config "$api_url" "${nodes[@]}"
 
+    # Setup certificate directory
+    setup_cert_directory
+
     # Create and start service
     create_service
     start_service
@@ -336,6 +356,13 @@ install() {
     echo "  Restart:       systemctl restart ${SERVICE_NAME}"
     echo "  Stop:          systemctl stop ${SERVICE_NAME}"
     echo "  Edit config:   nano ${CONFIG_FILE}"
+    echo ""
+    echo "Certificate storage:"
+    if [ -d "$CERT_DIR" ] && [ -w "$CERT_DIR" ]; then
+        echo "  Persistent:    $CERT_DIR (certificates persist across reboots)"
+    else
+        echo "  Temporary:     /tmp/orrisp/certs (certificates regenerated on reboot)"
+    fi
 }
 
 # Uninstall function
@@ -371,6 +398,12 @@ uninstall() {
     if [ -d "$CONFIG_DIR" ]; then
         print_info "Removing configuration directory..."
         rm -rf "$CONFIG_DIR"
+    fi
+
+    # Remove certificate directory
+    if [ -d "$CERT_DIR" ]; then
+        print_info "Removing certificate directory..."
+        rm -rf "$CERT_DIR"
     fi
 
     print_info "Uninstallation completed successfully!"
