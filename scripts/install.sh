@@ -2,7 +2,7 @@
 
 # Orrisp Node Agent Installer
 # Usage:
-#   Install:   sudo bash install.sh --api-url https://api.example.com --node 1:token1 [--node 2:token2] [--version latest]
+#   Install:   sudo bash install.sh --api-url https://api.example.com --node node_xxx:token [--node node_yyy:token] [--version latest]
 #   Uninstall: sudo bash install.sh uninstall
 
 set -e
@@ -298,9 +298,9 @@ install() {
         exit 1
     fi
 
-    # Validate node format
+    # Validate node format (supports numeric IDs and Stripe-style IDs like node_xxx)
     for node in "${nodes[@]}"; do
-        if ! echo "$node" | grep -qE '^[0-9]+:.+$'; then
+        if ! echo "$node" | grep -qE '^[a-zA-Z0-9_]+:.+$'; then
             print_error "Invalid node format: $node (expected id:token)"
             exit 1
         fi
@@ -427,13 +427,13 @@ usage() {
     echo ""
     echo "Examples:"
     echo "  Single node:"
-    echo "    sudo bash $0 --api-url https://api.example.com --node 1:your_token_here"
+    echo "    sudo bash $0 --api-url https://api.example.com --node node_abc123:your_token_here"
     echo ""
     echo "  Multiple nodes:"
-    echo "    sudo bash $0 --api-url https://api.example.com --node 1:token1 --node 2:token2"
+    echo "    sudo bash $0 --api-url https://api.example.com --node node_abc:token1 --node node_def:token2"
     echo ""
     echo "  Specific version:"
-    echo "    sudo bash $0 --api-url https://api.example.com --node 1:token1 --version v1.0.0"
+    echo "    sudo bash $0 --api-url https://api.example.com --node node_abc:token --version v1.0.0"
 }
 
 # Main
