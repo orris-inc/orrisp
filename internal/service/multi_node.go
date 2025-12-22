@@ -39,7 +39,7 @@ func NewMultiNodeService(cfg *config.Config, logger *slog.Logger) (*MultiNodeSer
 			for _, s := range services {
 				_ = s.Stop()
 			}
-			return nil, fmt.Errorf("failed to create service for node %d: %w", instance.ID, err)
+			return nil, fmt.Errorf("failed to create service for node %s: %w", instance.SID, err)
 		}
 		services = append(services, svc)
 	}

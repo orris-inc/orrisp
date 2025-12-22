@@ -24,7 +24,7 @@ type APIConfig struct {
 
 // NodeInstance represents a single node instance configuration
 type NodeInstance struct {
-	ID       int    `yaml:"id"`        // Node ID
+	SID      string `yaml:"sid"`       // Node SID (Stripe-style: node_xxx)
 	Token    string `yaml:"token"`     // Node authentication token
 	CertPath string `yaml:"cert_path"` // TLS certificate path
 	KeyPath  string `yaml:"key_path"`  // TLS private key path
@@ -95,18 +95,18 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate each node instance
-	seenIDs := make(map[int]bool)
+	seenSIDs := make(map[string]bool)
 	for i, node := range c.Nodes {
-		if node.ID <= 0 {
-			return fmt.Errorf("nodes[%d].id must be greater than 0", i)
+		if node.SID == "" {
+			return fmt.Errorf("nodes[%d].sid cannot be empty", i)
 		}
 		if node.Token == "" {
 			return fmt.Errorf("nodes[%d].token cannot be empty", i)
 		}
-		if seenIDs[node.ID] {
-			return fmt.Errorf("duplicate node id: %d", node.ID)
+		if seenSIDs[node.SID] {
+			return fmt.Errorf("duplicate node sid: %s", node.SID)
 		}
-		seenIDs[node.ID] = true
+		seenSIDs[node.SID] = true
 	}
 	return nil
 }

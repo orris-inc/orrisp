@@ -9,7 +9,7 @@ import (
 // Client traffic statistics client
 type Client struct {
 	mu      sync.RWMutex
-	traffic map[int]*TrafficData // subscription_id -> traffic
+	traffic map[string]*TrafficData // subscription_sid -> traffic
 }
 
 // TrafficData traffic data
@@ -21,21 +21,21 @@ type TrafficData struct {
 // NewClient creates new traffic statistics client
 func NewClient() *Client {
 	return &Client{
-		traffic: make(map[int]*TrafficData),
+		traffic: make(map[string]*TrafficData),
 	}
 }
 
 // RecordTraffic records traffic data
-func (c *Client) RecordTraffic(subscriptionID int, upload, download int64) {
+func (c *Client) RecordTraffic(subscriptionSID string, upload, download int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, exists := c.traffic[subscriptionID]; !exists {
-		c.traffic[subscriptionID] = &TrafficData{}
+	if _, exists := c.traffic[subscriptionSID]; !exists {
+		c.traffic[subscriptionSID] = &TrafficData{}
 	}
 
-	c.traffic[subscriptionID].Upload += upload
-	c.traffic[subscriptionID].Download += download
+	c.traffic[subscriptionSID].Upload += upload
+	c.traffic[subscriptionSID].Download += download
 }
 
 // GetAndResetTraffic gets and resets traffic statistics
@@ -45,18 +45,18 @@ func (c *Client) GetAndResetTraffic() []api.TrafficReport {
 	defer c.mu.Unlock()
 
 	var items []api.TrafficReport
-	for subID, data := range c.traffic {
+	for subSID, data := range c.traffic {
 		if data.Upload > 0 || data.Download > 0 {
 			items = append(items, api.TrafficReport{
-				SubscriptionID: subID,
-				Upload:         data.Upload,
-				Download:       data.Download,
+				SubscriptionSID: subSID,
+				Upload:          data.Upload,
+				Download:        data.Download,
 			})
 		}
 	}
 
 	// Clear statistics
-	c.traffic = make(map[int]*TrafficData)
+	c.traffic = make(map[string]*TrafficData)
 
 	return items
 }
@@ -67,12 +67,12 @@ func (c *Client) GetTraffic() []api.TrafficReport {
 	defer c.mu.RUnlock()
 
 	var items []api.TrafficReport
-	for subID, data := range c.traffic {
+	for subSID, data := range c.traffic {
 		if data.Upload > 0 || data.Download > 0 {
 			items = append(items, api.TrafficReport{
-				SubscriptionID: subID,
-				Upload:         data.Upload,
-				Download:       data.Download,
+				SubscriptionSID: subSID,
+				Upload:          data.Upload,
+				Download:        data.Download,
 			})
 		}
 	}
@@ -85,5 +85,5 @@ func (c *Client) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.traffic = make(map[int]*TrafficData)
+	c.traffic = make(map[string]*TrafficData)
 }

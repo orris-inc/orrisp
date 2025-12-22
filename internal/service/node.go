@@ -56,14 +56,14 @@ func NewNodeService(cfg *config.Config, nodeInstance config.NodeInstance, logger
 		return nil, fmt.Errorf("logger cannot be nil")
 	}
 
-	// Create logger with node ID context
-	nodeLogger := logger.With(slog.Int("node_id", nodeInstance.ID))
+	// Create logger with node SID context
+	nodeLogger := logger.With(slog.String("node_sid", nodeInstance.SID))
 
 	// Create API client with functional options
 	apiClient := api.NewClient(
 		cfg.API.BaseURL,
-		nodeInstance.ID,
 		nodeInstance.Token,
+		nodeInstance.SID,
 		api.WithTimeout(cfg.GetAPITimeout()),
 	)
 
@@ -163,7 +163,7 @@ func (s *NodeService) fetchNodeConfig() error {
 	s.mu.Unlock()
 
 	s.logger.Info("Node configuration fetched successfully",
-		slog.Int("node_id", nodeConfig.NodeID),
+		slog.String("node_sid", nodeConfig.NodeSID),
 		slog.String("protocol", nodeConfig.Protocol),
 		slog.String("host", nodeConfig.ServerHost),
 		slog.Int("port", nodeConfig.ServerPort),
@@ -237,7 +237,7 @@ func (s *NodeService) usersChanged(oldUsers, newUsers []api.Subscription) bool {
 			return true
 		}
 		// Check if user details changed
-		if oldUser.SubscriptionID != newUser.SubscriptionID ||
+		if oldUser.SubscriptionSID != newUser.SubscriptionSID ||
 			oldUser.Password != newUser.Password {
 			return true
 		}
@@ -249,9 +249,9 @@ func (s *NodeService) usersChanged(oldUsers, newUsers []api.Subscription) bool {
 
 // updateUserMap updates the traffic tracker's user mapping
 func (s *NodeService) updateUserMap(users []api.Subscription) {
-	userMap := make(map[string]int, len(users))
+	userMap := make(map[string]string, len(users))
 	for _, user := range users {
-		userMap[user.Name] = user.SubscriptionID
+		userMap[user.Name] = user.SubscriptionSID
 	}
 	s.trafficTracker.SetUserMap(userMap)
 }
@@ -269,7 +269,7 @@ func (s *NodeService) reportTraffic() error {
 	// Log detailed traffic data for debugging
 	for _, item := range trafficItems {
 		s.logger.Info("Traffic collected",
-			slog.Int("subscription_id", item.SubscriptionID),
+			slog.String("subscription_sid", item.SubscriptionSID),
 			slog.Int64("upload", item.Upload),
 			slog.Int64("download", item.Download),
 		)
@@ -551,10 +551,10 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 		return s.certPath, s.keyPath, nil
 	}
 
-	// Generate self-signed certificate (use node ID in path for multi-node support)
+	// Generate self-signed certificate (use node SID in path for multi-node support)
 	// Try persistent directory first, fallback to temporary directory if needed
-	persistentDir := fmt.Sprintf("/var/lib/orrisp/certs/node-%d", s.nodeInstance.ID)
-	tempDir := fmt.Sprintf("/tmp/orrisp/certs/node-%d", s.nodeInstance.ID)
+	persistentDir := fmt.Sprintf("/var/lib/orrisp/certs/%s", s.nodeInstance.SID)
+	tempDir := fmt.Sprintf("/tmp/orrisp/certs/%s", s.nodeInstance.SID)
 
 	// Try persistent directory first
 	certDir := persistentDir
@@ -665,7 +665,7 @@ func (s *NodeService) GetNodeInfo() map[string]interface{} {
 	}
 
 	if s.nodeConfig != nil {
-		info["node_id"] = s.nodeConfig.NodeID
+		info["node_sid"] = s.nodeConfig.NodeSID
 		info["protocol"] = s.nodeConfig.Protocol
 		info["port"] = s.nodeConfig.ServerPort
 	}

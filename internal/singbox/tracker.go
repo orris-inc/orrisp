@@ -19,7 +19,7 @@ type TrafficTracker struct {
 	statsClient *stats.Client
 	logger      *slog.Logger
 	mu          sync.RWMutex
-	userMap     map[string]int // username -> subscription_id
+	userMap     map[string]string // username -> subscription_sid
 }
 
 // NewTrafficTracker creates a new traffic tracker
@@ -27,12 +27,12 @@ func NewTrafficTracker(statsClient *stats.Client, logger *slog.Logger) *TrafficT
 	return &TrafficTracker{
 		statsClient: statsClient,
 		logger:      logger,
-		userMap:     make(map[string]int),
+		userMap:     make(map[string]string),
 	}
 }
 
-// SetUserMap sets the username to subscription ID mapping
-func (t *TrafficTracker) SetUserMap(userMap map[string]int) {
+// SetUserMap sets the username to subscription SID mapping
+func (t *TrafficTracker) SetUserMap(userMap map[string]string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.userMap = userMap
@@ -41,12 +41,12 @@ func (t *TrafficTracker) SetUserMap(userMap map[string]int) {
 	)
 }
 
-// getSubscriptionID returns the subscription ID for a username
-func (t *TrafficTracker) getSubscriptionID(username string) (int, bool) {
+// getSubscriptionSID returns the subscription SID for a username
+func (t *TrafficTracker) getSubscriptionSID(username string) (string, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	id, ok := t.userMap[username]
-	return id, ok
+	sid, ok := t.userMap[username]
+	return sid, ok
 }
 
 // RoutedConnection wraps a TCP connection to track traffic
@@ -63,7 +63,7 @@ func (t *TrafficTracker) RoutedConnection(
 		return conn
 	}
 
-	subID, ok := t.getSubscriptionID(username)
+	subSID, ok := t.getSubscriptionSID(username)
 	if !ok {
 		t.logger.Warn("User not found in mapping",
 			slog.String("user", username),
@@ -73,15 +73,15 @@ func (t *TrafficTracker) RoutedConnection(
 
 	t.logger.Debug("Connection tracked",
 		slog.String("user", username),
-		slog.Int("subscription_id", subID),
+		slog.String("subscription_sid", subSID),
 		slog.String("inbound", metadata.Inbound),
 		slog.String("destination", metadata.Destination.String()),
 	)
 	return &countingConn{
-		Conn:           conn,
-		statsClient:    t.statsClient,
-		subscriptionID: subID,
-		logger:         t.logger,
+		Conn:            conn,
+		statsClient:     t.statsClient,
+		subscriptionSID: subSID,
+		logger:          t.logger,
 	}
 }
 
@@ -98,7 +98,7 @@ func (t *TrafficTracker) RoutedPacketConnection(
 		return conn
 	}
 
-	subID, ok := t.getSubscriptionID(username)
+	subSID, ok := t.getSubscriptionSID(username)
 	if !ok {
 		t.logger.Warn("User not found in mapping",
 			slog.String("user", username),
@@ -108,26 +108,26 @@ func (t *TrafficTracker) RoutedPacketConnection(
 
 	t.logger.Debug("Packet connection tracked",
 		slog.String("user", username),
-		slog.Int("subscription_id", subID),
+		slog.String("subscription_sid", subSID),
 		slog.String("inbound", metadata.Inbound),
 	)
 	return &countingPacketConn{
-		PacketConn:     conn,
-		statsClient:    t.statsClient,
-		subscriptionID: subID,
-		logger:         t.logger,
+		PacketConn:      conn,
+		statsClient:     t.statsClient,
+		subscriptionSID: subSID,
+		logger:          t.logger,
 	}
 }
 
 // countingConn wraps net.Conn to count bytes transferred
 type countingConn struct {
 	net.Conn
-	statsClient    *stats.Client
-	subscriptionID int
-	logger         *slog.Logger
-	upload         atomic.Int64
-	download       atomic.Int64
-	closed         atomic.Bool
+	statsClient     *stats.Client
+	subscriptionSID string
+	logger          *slog.Logger
+	upload          atomic.Int64
+	download        atomic.Int64
+	closed          atomic.Bool
 }
 
 func (c *countingConn) Read(b []byte) (n int, err error) {
@@ -155,11 +155,11 @@ func (c *countingConn) Close() error {
 		download := c.download.Load()
 		if upload > 0 || download > 0 {
 			c.logger.Debug("Connection closed",
-				slog.Int("subscription_id", c.subscriptionID),
+				slog.String("subscription_sid", c.subscriptionSID),
 				slog.Int64("upload", upload),
 				slog.Int64("download", download),
 			)
-			c.statsClient.RecordTraffic(c.subscriptionID, upload, download)
+			c.statsClient.RecordTraffic(c.subscriptionSID, upload, download)
 		}
 	}
 	return c.Conn.Close()
@@ -168,12 +168,12 @@ func (c *countingConn) Close() error {
 // countingPacketConn wraps N.PacketConn to count bytes transferred
 type countingPacketConn struct {
 	N.PacketConn
-	statsClient    *stats.Client
-	subscriptionID int
-	logger         *slog.Logger
-	upload         atomic.Int64
-	download       atomic.Int64
-	closed         atomic.Bool
+	statsClient     *stats.Client
+	subscriptionSID string
+	logger          *slog.Logger
+	upload          atomic.Int64
+	download        atomic.Int64
+	closed          atomic.Bool
 }
 
 func (c *countingPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
@@ -209,11 +209,11 @@ func (c *countingPacketConn) Close() error {
 		download := c.download.Load()
 		if upload > 0 || download > 0 {
 			c.logger.Debug("Packet connection closed",
-				slog.Int("subscription_id", c.subscriptionID),
+				slog.String("subscription_sid", c.subscriptionSID),
 				slog.Int64("upload", upload),
 				slog.Int64("download", download),
 			)
-			c.statsClient.RecordTraffic(c.subscriptionID, upload, download)
+			c.statsClient.RecordTraffic(c.subscriptionSID, upload, download)
 		}
 	}
 	return c.PacketConn.Close()

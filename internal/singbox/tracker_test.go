@@ -19,8 +19,8 @@ func TestTrafficTracker(t *testing.T) {
 	tracker := NewTrafficTracker(statsClient, logger)
 
 	// Set user mapping
-	userMap := map[string]int{
-		"testuser": 100,
+	userMap := map[string]string{
+		"testuser": "sub_100",
 	}
 	tracker.SetUserMap(userMap)
 
@@ -72,9 +72,9 @@ func TestTrafficTracker(t *testing.T) {
 
 	found := false
 	for _, item := range traffic {
-		if item.SubscriptionID == 100 {
+		if item.SubscriptionSID == "sub_100" {
 			found = true
-			t.Logf("Traffic for subscription 100: upload=%d, download=%d",
+			t.Logf("Traffic for subscription sub_100: upload=%d, download=%d",
 				item.Upload, item.Download)
 			if item.Upload == 0 {
 				t.Error("Upload should be > 0")
@@ -86,7 +86,7 @@ func TestTrafficTracker(t *testing.T) {
 	}
 
 	if !found {
-		t.Error("Traffic for subscription 100 not found")
+		t.Error("Traffic for subscription sub_100 not found")
 	}
 }
 

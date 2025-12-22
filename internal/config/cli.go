@@ -29,7 +29,7 @@ var (
 )
 
 func init() {
-	flag.Var(&nodes, "node", "node configuration in format 'id:token' (can be specified multiple times)")
+	flag.Var(&nodes, "node", "node configuration in format 'sid:token' (can be specified multiple times)")
 }
 
 // LoadFromCLI loads configuration from CLI flags or config file
@@ -59,14 +59,14 @@ func buildConfigFromCLI() (*Config, error) {
 	for _, n := range nodes {
 		parts := strings.SplitN(n, ":", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid --node format '%s', expected 'id:token'", n)
+			return nil, fmt.Errorf("invalid --node format '%s', expected 'sid:token'", n)
 		}
-		var id int
-		if _, err := fmt.Sscanf(parts[0], "%d", &id); err != nil {
-			return nil, fmt.Errorf("invalid node id '%s': %w", parts[0], err)
+		sid := parts[0]
+		if sid == "" {
+			return nil, fmt.Errorf("node sid cannot be empty in '%s'", n)
 		}
 		cfg.Nodes = append(cfg.Nodes, NodeInstance{
-			ID:    id,
+			SID:   sid,
 			Token: parts[1],
 		})
 	}
