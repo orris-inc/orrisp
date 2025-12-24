@@ -162,10 +162,10 @@ nodes:
 EOF
 
     for node in "${nodes[@]}"; do
-        local id=$(echo "$node" | cut -d':' -f1)
+        local sid=$(echo "$node" | cut -d':' -f1)
         local token=$(echo "$node" | cut -d':' -f2-)
         cat >> "$CONFIG_FILE" << EOF
-  - id: ${id}
+  - sid: "${sid}"
     token: "${token}"
     cert_path: ""
     key_path: ""

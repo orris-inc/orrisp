@@ -7,16 +7,16 @@ api:
 
 # 节点配置 (支持单节点或多节点)
 nodes:
-  - id: 1
+  - sid: "node_xxxxxxxxxxxxxx"  # Stripe-style 节点 ID
     token: "your_node_token_here"
     cert_path: ""        # TLS 证书路径 (Trojan/VLESS 协议需要)
     key_path: ""         # TLS 私钥路径 (Trojan/VLESS 协议需要)
   # 多节点配置示例:
-  # - id: 2
+  # - sid: "node_yyyyyyyyyyyyyy"
   #   token: "node2_token_here"
   #   cert_path: ""
   #   key_path: ""
-  # - id: 3
+  # - sid: "node_zzzzzzzzzzzzzz"
   #   token: "node3_token_here"
   #   cert_path: ""
   #   key_path: ""
