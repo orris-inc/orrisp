@@ -177,6 +177,8 @@ func (s *Service) Reload(options *option.Options) error {
 
 	// Start new instance
 	if err := newInstance.Start(); err != nil {
+		// Close the instance to release resources allocated by box.New()
+		_ = newInstance.Close()
 		newCancel()
 		return fmt.Errorf("failed to start new sing-box instance: %w", err)
 	}

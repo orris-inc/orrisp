@@ -87,3 +87,22 @@ func (c *Client) Reset() {
 
 	c.traffic = make(map[string]*TrafficData)
 }
+
+// RestoreTraffic restores traffic data that failed to report
+// This is used when API call fails to prevent data loss
+func (c *Client) RestoreTraffic(items []api.TrafficReport) {
+	if len(items) == 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, item := range items {
+		if _, exists := c.traffic[item.SubscriptionSID]; !exists {
+			c.traffic[item.SubscriptionSID] = &TrafficData{}
+		}
+		c.traffic[item.SubscriptionSID].Upload += item.Upload
+		c.traffic[item.SubscriptionSID].Download += item.Download
+	}
+}

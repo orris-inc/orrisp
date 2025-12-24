@@ -97,18 +97,31 @@ func (s *NodeService) Start(ctx context.Context) error {
 
 	s.logger.Info("Starting node service...")
 
+	// Helper to clean up state on failure
+	cleanupOnFailure := func() {
+		s.mu.Lock()
+		if s.cancel != nil {
+			s.cancel()
+			s.cancel = nil
+		}
+		s.mu.Unlock()
+	}
+
 	// 1. Get node configuration
 	if err := s.fetchNodeConfig(); err != nil {
+		cleanupOnFailure()
 		return fmt.Errorf("failed to fetch node config: %w", err)
 	}
 
 	// 2. Get user list
 	if err := s.syncUsers(); err != nil {
+		cleanupOnFailure()
 		return fmt.Errorf("failed to sync users: %w", err)
 	}
 
 	// 3. Start sing-box
 	if err := s.startSingbox(); err != nil {
+		cleanupOnFailure()
 		return fmt.Errorf("failed to start sing-box: %w", err)
 	}
 
@@ -281,6 +294,11 @@ func (s *NodeService) reportTraffic() error {
 	result, err := s.apiClient.ReportTraffic(ctx, trafficItems)
 	if err != nil {
 		s.logger.Error("Failed to report traffic", slog.Any("err", err))
+		// Restore traffic data to prevent data loss
+		s.statsClient.RestoreTraffic(trafficItems)
+		s.logger.Warn("Traffic data restored due to report failure",
+			slog.Int("count", len(trafficItems)),
+		)
 		return err
 	}
 

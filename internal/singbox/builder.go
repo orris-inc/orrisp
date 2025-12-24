@@ -71,6 +71,26 @@ func BuildConfig(nodeConfig *api.NodeConfig, subscriptions []api.Subscription, c
 	return options, nil
 }
 
+// buildTLSOptions builds TLS options with performance optimizations
+func buildTLSOptions(nodeConfig *api.NodeConfig) *option.InboundTLSOptions {
+	tlsOptions := &option.InboundTLSOptions{
+		Enabled:    true,
+		MinVersion: "1.3", // Force TLS 1.3 for better performance
+		MaxVersion: "1.3", // Only use TLS 1.3
+		ALPN: []string{
+			"h2",       // HTTP/2 for better multiplexing
+			"http/1.1", // HTTP/1.1 fallback
+		},
+	}
+	if nodeConfig.SNI != "" {
+		tlsOptions.ServerName = nodeConfig.SNI
+	}
+	if nodeConfig.AllowInsecure {
+		tlsOptions.Insecure = true
+	}
+	return tlsOptions
+}
+
 // buildShadowsocksInbound builds Shadowsocks inbound configuration
 func buildShadowsocksInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscription) (*option.Inbound, error) {
 	// Parse listen address
@@ -131,6 +151,10 @@ func buildTrojanInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscrip
 	}
 
 	// Build user list
+	if len(subscriptions) == 0 {
+		return nil, fmt.Errorf("no subscriptions available for trojan inbound")
+	}
+
 	users := make([]option.TrojanUser, 0, len(subscriptions))
 	for _, sub := range subscriptions {
 		users = append(users, option.TrojanUser{
@@ -141,24 +165,6 @@ func buildTrojanInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscrip
 
 	// Convert netip.Addr to badoption.Addr
 	badAddr := badoption.Addr(listenAddr)
-
-	// Build TLS options with performance optimizations
-	tlsOptions := &option.InboundTLSOptions{
-		Enabled:    true,
-		MinVersion: "1.3", // Force TLS 1.3 for better performance
-		MaxVersion: "1.3", // Only use TLS 1.3
-		ALPN: []string{ // Application-Layer Protocol Negotiation
-			"h2",       // HTTP/2 for better multiplexing
-			"http/1.1", // HTTP/1.1 fallback
-		},
-		ECH: nil, // Encrypted Client Hello (optional, for privacy)
-	}
-	if nodeConfig.SNI != "" {
-		tlsOptions.ServerName = nodeConfig.SNI
-	}
-	if nodeConfig.AllowInsecure {
-		tlsOptions.Insecure = true
-	}
 
 	inbound := &option.Inbound{
 		Type: "trojan",
@@ -174,7 +180,7 @@ func buildTrojanInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscrip
 			},
 			Users: users,
 			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
-				TLS: tlsOptions,
+				TLS: buildTLSOptions(nodeConfig),
 			},
 		},
 	}
@@ -191,6 +197,10 @@ func buildVlessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 	}
 
 	// Build user list
+	if len(subscriptions) == 0 {
+		return nil, fmt.Errorf("no subscriptions available for vless inbound")
+	}
+
 	users := make([]option.VLESSUser, 0, len(subscriptions))
 	for _, sub := range subscriptions {
 		users = append(users, option.VLESSUser{
@@ -201,24 +211,6 @@ func buildVlessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 
 	// Convert netip.Addr to badoption.Addr
 	badAddr := badoption.Addr(listenAddr)
-
-	// Build TLS options with performance optimizations
-	tlsOptions := &option.InboundTLSOptions{
-		Enabled:    true,
-		MinVersion: "1.3", // Force TLS 1.3 for better performance
-		MaxVersion: "1.3", // Only use TLS 1.3
-		ALPN: []string{ // Application-Layer Protocol Negotiation
-			"h2",       // HTTP/2 for better multiplexing
-			"http/1.1", // HTTP/1.1 fallback
-		},
-		ECH: nil, // Encrypted Client Hello (optional, for privacy)
-	}
-	if nodeConfig.SNI != "" {
-		tlsOptions.ServerName = nodeConfig.SNI
-	}
-	if nodeConfig.AllowInsecure {
-		tlsOptions.Insecure = true
-	}
 
 	inbound := &option.Inbound{
 		Type: "vless",
@@ -234,7 +226,7 @@ func buildVlessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 			},
 			Users: users,
 			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
-				TLS: tlsOptions,
+				TLS: buildTLSOptions(nodeConfig),
 			},
 		},
 	}
