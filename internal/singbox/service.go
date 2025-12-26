@@ -23,6 +23,7 @@ type Service struct {
 	interceptor *StderrInterceptor
 	tracker     *TrafficTracker
 	logger      *slog.Logger
+	reloading   bool // prevents concurrent Reload calls
 }
 
 // NewService creates sing-box service instance
@@ -112,10 +113,12 @@ func (s *Service) Close() error {
 	if err := s.box.Close(); err != nil {
 		return fmt.Errorf("failed to close sing-box: %w", err)
 	}
+	s.box = nil
 
 	// Cancel context
 	if s.cancel != nil {
 		s.cancel()
+		s.cancel = nil
 	}
 
 	// Stop interceptor
@@ -126,22 +129,118 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// Reload reloads configuration with graceful instance swap
-// Implements zero-downtime reload by creating new instance first, then swapping
+// Reload reloads configuration by stopping old instance and starting new one
+// Note: This causes a brief service interruption while the port is released and rebound
+// If new instance fails to start, attempts to recover with old configuration
+// Returns ErrReloadInProgress if another reload is already in progress
 func (s *Service) Reload(options *option.Options) error {
 	if options == nil {
 		return fmt.Errorf("options cannot be nil")
 	}
 
+	// Step 1: Check and set reloading flag
+	s.mu.Lock()
+	if s.reloading {
+		s.mu.Unlock()
+		return fmt.Errorf("reload already in progress")
+	}
+	s.reloading = true
+	s.mu.Unlock()
+
+	// Ensure reloading flag is cleared when done
+	defer func() {
+		s.mu.Lock()
+		s.reloading = false
+		s.mu.Unlock()
+	}()
+
 	reloadStart := time.Now()
 	if s.logger != nil {
-		s.logger.Info("Starting graceful reload...")
+		s.logger.Info("Starting reload...")
 	}
 
-	// Step 1: Create new instance WITHOUT holding lock
-	// This is the most time-consuming operation and doesn't need to block traffic
-	createStart := time.Now()
+	// Step 2: Save old config and close old instance to release the port
+	s.mu.Lock()
+	oldBox := s.box
+	oldCancel := s.cancel
+	oldOptions := s.options
+	tracker := s.tracker
+	s.box = nil
+	s.cancel = nil
+	s.mu.Unlock()
 
+	if oldBox != nil {
+		closeStart := time.Now()
+		if err := oldBox.Close(); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("Error closing old instance", slog.Any("err", err))
+			}
+		}
+		if oldCancel != nil {
+			oldCancel()
+		}
+		if s.logger != nil {
+			s.logger.Debug("Old instance closed",
+				slog.Duration("close_duration", time.Since(closeStart)),
+			)
+		}
+	}
+
+	// Step 3: Try to start new instance
+	newInstance, newCtx, newCancel, err := s.createAndStartInstance(options, tracker)
+	if err != nil {
+		// Step 4: New instance failed, try to recover with old config
+		if oldOptions != nil {
+			if s.logger != nil {
+				s.logger.Warn("New instance failed, attempting recovery with old config",
+					slog.Any("err", err),
+				)
+			}
+			recoveredInstance, recoveredCtx, recoveredCancel, recoverErr := s.createAndStartInstance(oldOptions, tracker)
+			if recoverErr != nil {
+				// Recovery also failed, service is down
+				if s.logger != nil {
+					s.logger.Error("Recovery failed, service is down",
+						slog.Any("original_err", err),
+						slog.Any("recovery_err", recoverErr),
+					)
+				}
+				return fmt.Errorf("reload failed and recovery failed: original: %w, recovery: %v", err, recoverErr)
+			}
+			// Recovery succeeded
+			s.mu.Lock()
+			s.box = recoveredInstance
+			s.options = oldOptions
+			s.ctx = recoveredCtx
+			s.cancel = recoveredCancel
+			s.mu.Unlock()
+			if s.logger != nil {
+				s.logger.Info("Recovery succeeded, running with old config")
+			}
+			return fmt.Errorf("reload failed, recovered with old config: %w", err)
+		}
+		return fmt.Errorf("failed to start new sing-box instance: %w", err)
+	}
+
+	// Step 5: Store new instance
+	s.mu.Lock()
+	s.box = newInstance
+	s.options = options
+	s.ctx = newCtx
+	s.cancel = newCancel
+	s.mu.Unlock()
+
+	if s.logger != nil {
+		s.logger.Info("Reload completed",
+			slog.Duration("total_duration", time.Since(reloadStart)),
+		)
+	}
+
+	return nil
+}
+
+// createAndStartInstance creates and starts a new sing-box instance
+func (s *Service) createAndStartInstance(options *option.Options, tracker *TrafficTracker) (*box.Box, context.Context, context.CancelFunc, error) {
 	// Create new context with registries
 	newCtx, newCancel := context.WithCancel(context.Background())
 	newCtx = include.Context(newCtx)
@@ -153,22 +252,8 @@ func (s *Service) Reload(options *option.Options) error {
 	})
 	if err != nil {
 		newCancel()
-		return fmt.Errorf("failed to create new sing-box instance: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create instance: %w", err)
 	}
-
-	if s.logger != nil {
-		s.logger.Debug("New instance created",
-			slog.Duration("create_duration", time.Since(createStart)),
-		)
-	}
-
-	// Step 2: Register tracker and start new instance (still no lock)
-	startStart := time.Now()
-
-	// Get tracker under read lock
-	s.mu.RLock()
-	tracker := s.tracker
-	s.mu.RUnlock()
 
 	// Register traffic tracker to router if set
 	if tracker != nil {
@@ -177,79 +262,10 @@ func (s *Service) Reload(options *option.Options) error {
 
 	// Start new instance
 	if err := newInstance.Start(); err != nil {
-		// Close the instance to release resources allocated by box.New()
 		_ = newInstance.Close()
 		newCancel()
-		return fmt.Errorf("failed to start new sing-box instance: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to start instance: %w", err)
 	}
 
-	if s.logger != nil {
-		s.logger.Debug("New instance started",
-			slog.Duration("start_duration", time.Since(startStart)),
-		)
-	}
-
-	// Step 3: Quick swap - MINIMAL lock time
-	// This is the only operation that blocks incoming connections
-	swapStart := time.Now()
-
-	s.mu.Lock()
-	oldBox := s.box
-	oldCancel := s.cancel
-
-	s.box = newInstance
-	s.options = options
-	s.ctx = newCtx
-	s.cancel = newCancel
-	s.mu.Unlock()
-
-	if s.logger != nil {
-		s.logger.Debug("Instance swap completed",
-			slog.Duration("swap_duration", time.Since(swapStart)),
-		)
-	}
-
-	// Step 4: Gracefully shutdown old instance in background
-	// Give existing connections time to complete
-	if oldBox != nil {
-		go s.gracefulShutdown(oldBox, oldCancel)
-	}
-
-	if s.logger != nil {
-		s.logger.Info("Graceful reload completed",
-			slog.Duration("total_duration", time.Since(reloadStart)),
-		)
-	}
-
-	return nil
-}
-
-// gracefulShutdown closes old instance with grace period for existing connections
-func (s *Service) gracefulShutdown(oldBox *box.Box, oldCancel context.CancelFunc) {
-	shutdownTimeout := 30 * time.Second
-
-	if s.logger != nil {
-		s.logger.Debug("Starting graceful shutdown of old instance",
-			slog.Duration("timeout", shutdownTimeout),
-		)
-	}
-
-	// Wait briefly for existing connections to finish
-	time.Sleep(5 * time.Second)
-
-	// Close old instance
-	if err := oldBox.Close(); err != nil {
-		if s.logger != nil {
-			s.logger.Warn("Error closing old instance", slog.Any("err", err))
-		}
-	}
-
-	// Cancel old context
-	if oldCancel != nil {
-		oldCancel()
-	}
-
-	if s.logger != nil {
-		s.logger.Debug("Old instance shutdown completed")
-	}
+	return newInstance, newCtx, newCancel, nil
 }

@@ -212,7 +212,10 @@ func (s *NodeService) syncUsers() error {
 	)
 
 	// Check if user list actually changed (compare content, not just count)
-	if s.usersChanged(oldUsers, users) && s.singboxService != nil {
+	changed := s.usersChanged(oldUsers, users)
+	hasSingbox := s.singboxService != nil
+
+	if changed && hasSingbox {
 		s.logger.Info("User list changed, reloading sing-box...",
 			slog.Int("old_users", len(oldUsers)),
 			slog.Int("new_users", len(users)),
@@ -221,8 +224,12 @@ func (s *NodeService) syncUsers() error {
 			s.logger.Error("Failed to reload sing-box", slog.Any("err", err))
 			return err
 		}
+		s.logger.Info("sing-box reloaded with new user list")
 	} else {
-		s.logger.Debug("User list unchanged, skipping reload")
+		s.logger.Info("User list sync completed",
+			slog.Bool("changed", changed),
+			slog.Bool("singbox_running", hasSingbox),
+		)
 	}
 
 	return nil
@@ -233,6 +240,10 @@ func (s *NodeService) syncUsers() error {
 func (s *NodeService) usersChanged(oldUsers, newUsers []api.Subscription) bool {
 	// Different lengths means definitely changed
 	if len(oldUsers) != len(newUsers) {
+		s.logger.Debug("User count changed",
+			slog.Int("old", len(oldUsers)),
+			slog.Int("new", len(newUsers)),
+		)
 		return true
 	}
 
@@ -247,11 +258,13 @@ func (s *NodeService) usersChanged(oldUsers, newUsers []api.Subscription) bool {
 		oldUser, exists := oldMap[newUser.Name]
 		if !exists {
 			// New user added
+			s.logger.Debug("New user detected", slog.String("name", newUser.Name))
 			return true
 		}
 		// Check if user details changed
 		if oldUser.SubscriptionSID != newUser.SubscriptionSID ||
 			oldUser.Password != newUser.Password {
+			s.logger.Debug("User details changed", slog.String("name", newUser.Name))
 			return true
 		}
 	}
