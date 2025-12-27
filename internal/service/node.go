@@ -655,6 +655,11 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 func (s *NodeService) startScheduledTasks() {
 	s.logger.Info("Starting scheduled tasks...")
 
+	// Report status immediately on startup
+	if err := s.reportStatus(); err != nil {
+		s.logger.Warn("Failed to report initial status", slog.Any("err", err))
+	}
+
 	// User synchronization task
 	s.wg.Add(1)
 	go s.scheduleTask("User synchronization", s.config.GetUserSyncInterval(), func() error {
