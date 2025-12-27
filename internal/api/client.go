@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -74,7 +75,8 @@ func NewClient(baseURL, token string, nodeSID string, opts ...Option) (*Client, 
 }
 
 // validateSecureURL validates that the URL uses HTTPS scheme.
-// Returns an error if the URL is invalid or does not use HTTPS.
+// HTTP is allowed for IP addresses and localhost (development/internal use).
+// Returns an error if the URL is invalid or uses HTTP with a domain name.
 func validateSecureURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -82,11 +84,27 @@ func validateSecureURL(rawURL string) error {
 	}
 
 	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "https" {
-		return ErrInsecureURL
+	if scheme == "https" {
+		return nil
 	}
 
-	return nil
+	// Allow HTTP for IP addresses and localhost
+	host := parsed.Hostname()
+	if isIPAddress(host) || isLocalhost(host) {
+		return nil
+	}
+
+	return ErrInsecureURL
+}
+
+// isIPAddress checks if the host is an IP address.
+func isIPAddress(host string) bool {
+	return net.ParseIP(host) != nil
+}
+
+// isLocalhost checks if the host is localhost.
+func isLocalhost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // GetConfig retrieves the node configuration.
