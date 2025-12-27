@@ -25,6 +25,9 @@ func main() {
 	fmt.Printf("Version: %s\n", version)
 	fmt.Printf("Build Time: %s\n\n", buildTime)
 
+	// Set agent version for status reporting
+	service.SetAgentVersion(version)
+
 	// Load configuration from CLI flags or config file
 	cfg, err := config.LoadFromCLI()
 	if err != nil {

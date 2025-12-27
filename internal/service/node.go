@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -19,6 +18,14 @@ import (
 	"github.com/easayliu/orrisp/internal/util"
 	"github.com/sagernet/sing-box/option"
 )
+
+// Package-level version variable, set by main package
+var agentVersion = "dev"
+
+// SetAgentVersion sets the agent version for status reporting.
+func SetAgentVersion(v string) {
+	agentVersion = v
+}
 
 // NodeService node service
 type NodeService struct {
@@ -60,12 +67,15 @@ func NewNodeService(cfg *config.Config, nodeInstance config.NodeInstance, logger
 	nodeLogger := logger.With(slog.String("node_sid", nodeInstance.SID))
 
 	// Create API client with functional options
-	apiClient := api.NewClient(
+	apiClient, err := api.NewClient(
 		cfg.API.BaseURL,
 		nodeInstance.Token,
 		nodeInstance.SID,
 		api.WithTimeout(cfg.GetAPITimeout()),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create API client: %w", err)
+	}
 
 	// Create traffic statistics client
 	statsClient := stats.NewClient()
@@ -367,33 +377,56 @@ func (s *NodeService) reportOnline() error {
 	return nil
 }
 
-// collectSystemStatus collects system status
+// collectSystemStatus collects system status using prometheus/procfs
 func (s *NodeService) collectSystemStatus() *api.NodeStatus {
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
+	// Get system stats from procfs
+	sysStats := util.GetSystemStats()
 
-	// Calculate uptime (seconds)
-	uptime := int(time.Since(s.startTime).Seconds())
-
-	// CPU usage (simplified version, production environment needs more accurate calculation)
-	cpuPercent := fmt.Sprintf("%.1f%%", float64(runtime.NumGoroutine())*0.1)
-
-	// Memory usage
-	memPercent := fmt.Sprintf("%.1f%%", float64(mem.Alloc)/float64(mem.Sys)*100)
-
-	// Disk usage
-	diskPercent := s.getDiskUsage()
+	// Get disk stats
+	diskUsed, diskTotal, diskPercent := s.getDiskStats()
 
 	// Detect public IP for auto-reporting
 	ipv4, ipv6 := s.getPublicIPs()
 
 	return &api.NodeStatus{
-		CPU:        cpuPercent,
-		Mem:        memPercent,
-		Disk:       diskPercent,
-		Uptime:     uptime,
+		// CPU
+		CPUPercent: sysStats.CPUPercent,
+
+		// Memory
+		MemoryPercent: sysStats.MemoryPercent,
+		MemoryUsed:    sysStats.MemoryUsed,
+		MemoryTotal:   sysStats.MemoryTotal,
+		MemoryAvail:   sysStats.MemoryAvail,
+
+		// Disk
+		DiskPercent: diskPercent,
+		DiskUsed:    diskUsed,
+		DiskTotal:   diskTotal,
+
+		// Uptime
+		UptimeSeconds: time.Since(s.startTime).Milliseconds() / 1000,
+
+		// Load average
+		LoadAvg1:  sysStats.LoadAvg1,
+		LoadAvg5:  sysStats.LoadAvg5,
+		LoadAvg15: sysStats.LoadAvg15,
+
+		// Network
+		NetworkRxBytes: sysStats.NetworkRxBytes,
+		NetworkTxBytes: sysStats.NetworkTxBytes,
+		NetworkRxRate:  sysStats.NetworkRxRate,
+		NetworkTxRate:  sysStats.NetworkTxRate,
+
+		// Connections
+		TCPConnections: sysStats.TCPConnections,
+		UDPConnections: sysStats.UDPConnections,
+
+		// Network info
 		PublicIPv4: ipv4,
 		PublicIPv6: ipv6,
+
+		// Agent info
+		AgentVersion: agentVersion,
 	}
 }
 
@@ -430,24 +463,23 @@ func (s *NodeService) getPublicIPs() (ipv4, ipv6 string) {
 	return ipv4, ipv6
 }
 
-// getDiskUsage gets disk usage percentage for root filesystem
-func (s *NodeService) getDiskUsage() string {
+// getDiskStats gets disk statistics for root filesystem
+func (s *NodeService) getDiskStats() (used, total uint64, percent float64) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs("/", &stat); err != nil {
-		s.logger.Debug("Failed to get disk usage", slog.Any("err", err))
-		return "0%"
+		s.logger.Debug("Failed to get disk stats", slog.Any("err", err))
+		return 0, 0, 0
 	}
 
-	total := stat.Blocks * uint64(stat.Bsize)
+	total = stat.Blocks * uint64(stat.Bsize)
 	free := stat.Bfree * uint64(stat.Bsize)
-	used := total - free
+	used = total - free
 
-	if total == 0 {
-		return "0%"
+	if total > 0 {
+		percent = float64(used) / float64(total) * 100
 	}
 
-	percent := float64(used) / float64(total) * 100
-	return fmt.Sprintf("%.1f%%", percent)
+	return used, total, percent
 }
 
 // startSingbox starts sing-box

@@ -8,12 +8,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
 // ErrUnauthorized is returned when the API returns a 401 status code.
 // This typically means the node token is invalid or expired.
 var ErrUnauthorized = errors.New("unauthorized: invalid or expired node token")
+
+// ErrInsecureURL is returned when the API base URL does not use HTTPS.
+var ErrInsecureURL = errors.New("insecure URL: API base URL must use HTTPS to protect sensitive data")
 
 // Client is the Agent API client.
 type Client struct {
@@ -43,10 +48,17 @@ func WithTimeout(d time.Duration) Option {
 // NewClient creates a new Agent API client.
 //
 // Parameters:
-//   - baseURL: The API base URL (e.g., "https://api.example.com")
+//   - baseURL: The API base URL (must use HTTPS, e.g., "https://api.example.com")
 //   - token: The node authentication token
 //   - nodeSID: The node SID assigned by the server (Stripe-style: node_xxx)
-func NewClient(baseURL, token string, nodeSID string, opts ...Option) *Client {
+//
+// Returns an error if the base URL does not use HTTPS.
+func NewClient(baseURL, token string, nodeSID string, opts ...Option) (*Client, error) {
+	// Validate that the base URL uses HTTPS
+	if err := validateSecureURL(baseURL); err != nil {
+		return nil, err
+	}
+
 	c := &Client{
 		baseURL: baseURL,
 		token:   token,
@@ -58,7 +70,23 @@ func NewClient(baseURL, token string, nodeSID string, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
-	return c
+	return c, nil
+}
+
+// validateSecureURL validates that the URL uses HTTPS scheme.
+// Returns an error if the URL is invalid or does not use HTTPS.
+func validateSecureURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "https" {
+		return ErrInsecureURL
+	}
+
+	return nil
 }
 
 // GetConfig retrieves the node configuration.
