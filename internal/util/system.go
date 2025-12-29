@@ -1,7 +1,9 @@
 package util
 
 import (
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/procfs"
@@ -39,6 +41,9 @@ type SystemMonitor struct {
 	mu sync.RWMutex
 	fs procfs.FS
 
+	// initialized indicates whether procfs was successfully initialized
+	initialized atomic.Bool
+
 	// CPU state
 	lastCPUStat procfs.CPUStat
 	lastCPUTime time.Time
@@ -58,33 +63,49 @@ type netIfaceStats struct {
 
 // NewSystemMonitor creates a new system monitor.
 func NewSystemMonitor() *SystemMonitor {
-	fs, err := procfs.NewFS("/proc")
-	if err != nil {
-		return &SystemMonitor{
-			lastNetStats: make(map[string]netIfaceStats),
-		}
-	}
-
 	m := &SystemMonitor{
-		fs:           fs,
 		lastNetStats: make(map[string]netIfaceStats),
 	}
+
+	fs, err := procfs.NewFS("/proc")
+	if err != nil {
+		slog.Error("Failed to initialize procfs, system stats will be unavailable",
+			slog.Any("err", err),
+		)
+		return m
+	}
+
+	m.fs = fs
+	m.initialized.Store(true)
 
 	// Initialize CPU state
 	if stat, err := fs.Stat(); err == nil {
 		m.lastCPUStat = stat.CPUTotal
 		m.lastCPUTime = time.Now()
+	} else {
+		slog.Warn("Failed to get initial CPU stats", slog.Any("err", err))
 	}
 
 	// Initialize network state
 	m.updateNetworkStats()
 
+	slog.Debug("System monitor initialized successfully")
 	return m
 }
 
 // GetStats returns current system statistics.
 func (m *SystemMonitor) GetStats() SystemStats {
 	var stats SystemStats
+
+	// Try to reinitialize if not initialized (lazy initialization)
+	if !m.initialized.Load() {
+		m.tryReinitialize()
+	}
+
+	// If still not initialized, return empty stats
+	if !m.initialized.Load() {
+		return stats
+	}
 
 	// CPU
 	stats.CPUPercent = m.getCPUPercent()
@@ -124,6 +145,42 @@ func (m *SystemMonitor) GetStats() SystemStats {
 	stats.TCPConnections, stats.UDPConnections = m.getConnectionCounts()
 
 	return stats
+}
+
+// tryReinitialize attempts to reinitialize procfs (useful if /proc becomes available later).
+func (m *SystemMonitor) tryReinitialize() {
+	m.mu.Lock()
+
+	// Double-check under lock
+	if m.initialized.Load() {
+		m.mu.Unlock()
+		return
+	}
+
+	fs, err := procfs.NewFS("/proc")
+	if err != nil {
+		// Still can't initialize, log periodically
+		slog.Debug("Procfs still unavailable", slog.Any("err", err))
+		m.mu.Unlock()
+		return
+	}
+
+	m.fs = fs
+	m.initialized.Store(true)
+
+	// Initialize CPU state
+	if stat, err := fs.Stat(); err == nil {
+		m.lastCPUStat = stat.CPUTotal
+		m.lastCPUTime = time.Now()
+	}
+
+	// Release lock before calling updateNetworkStats (which also acquires the lock)
+	m.mu.Unlock()
+
+	// Initialize network state
+	m.updateNetworkStats()
+
+	slog.Info("System monitor reinitialized successfully")
 }
 
 // getCPUPercent calculates CPU usage percentage.

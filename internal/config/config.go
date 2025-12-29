@@ -11,6 +11,7 @@ import (
 // Config application configuration
 type Config struct {
 	API   APIConfig      `yaml:"api"`
+	Hub   HubConfig      `yaml:"hub"`
 	Nodes []NodeInstance `yaml:"nodes"` // Node instances configuration
 	Sync  SyncConfig     `yaml:"sync"`
 	Log   LogConfig      `yaml:"log"`
@@ -20,6 +21,16 @@ type Config struct {
 type APIConfig struct {
 	BaseURL string `yaml:"base_url"`
 	Timeout int    `yaml:"timeout"` // Request timeout (seconds)
+}
+
+// HubConfig Hub WebSocket configuration
+type HubConfig struct {
+	Enabled           bool    `yaml:"enabled"`             // Enable Hub connection
+	PingInterval      int     `yaml:"ping_interval"`       // Ping interval (seconds)
+	PongWait          int     `yaml:"pong_wait"`           // Pong wait timeout (seconds)
+	SampleInterval    int     `yaml:"sample_interval"`     // Status sampling interval (seconds), default 2
+	MaxSilentInterval int     `yaml:"max_silent_interval"` // Max time without status report (seconds), default 30
+	ChangeThreshold   float64 `yaml:"change_threshold"`    // Change threshold to trigger report (percent), default 5.0
 }
 
 // NodeInstance represents a single node instance configuration
@@ -50,6 +61,14 @@ func DefaultConfig() *Config {
 	return &Config{
 		API: APIConfig{
 			Timeout: 30,
+		},
+		Hub: HubConfig{
+			Enabled:           true, // Default: use WebSocket, fallback to REST on disconnect
+			PingInterval:      30,
+			PongWait:          60,
+			SampleInterval:    2,   // Sample every 2 seconds
+			MaxSilentInterval: 30,  // Report at least every 30 seconds
+			ChangeThreshold:   5.0, // Report when change exceeds 5%
 		},
 		Sync: SyncConfig{
 			UserInterval:    60,
@@ -154,4 +173,49 @@ func (c *Config) GetAPITimeout() time.Duration {
 		return 30 * time.Second
 	}
 	return time.Duration(c.API.Timeout) * time.Second
+}
+
+// IsHubEnabled returns whether Hub is enabled
+func (c *Config) IsHubEnabled() bool {
+	return c.Hub.Enabled
+}
+
+// GetHubPingInterval gets Hub ping interval
+func (c *Config) GetHubPingInterval() time.Duration {
+	if c.Hub.PingInterval <= 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(c.Hub.PingInterval) * time.Second
+}
+
+// GetHubPongWait gets Hub pong wait timeout
+func (c *Config) GetHubPongWait() time.Duration {
+	if c.Hub.PongWait <= 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(c.Hub.PongWait) * time.Second
+}
+
+// GetHubSampleInterval gets Hub status sampling interval
+func (c *Config) GetHubSampleInterval() time.Duration {
+	if c.Hub.SampleInterval <= 0 {
+		return 2 * time.Second
+	}
+	return time.Duration(c.Hub.SampleInterval) * time.Second
+}
+
+// GetHubMaxSilentInterval gets max time without status report
+func (c *Config) GetHubMaxSilentInterval() time.Duration {
+	if c.Hub.MaxSilentInterval <= 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(c.Hub.MaxSilentInterval) * time.Second
+}
+
+// GetHubChangeThreshold gets change threshold to trigger report
+func (c *Config) GetHubChangeThreshold() float64 {
+	if c.Hub.ChangeThreshold <= 0 {
+		return 5.0
+	}
+	return c.Hub.ChangeThreshold
 }

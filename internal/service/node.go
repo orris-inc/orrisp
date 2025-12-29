@@ -32,6 +32,7 @@ type NodeService struct {
 	config         *config.Config
 	nodeInstance   config.NodeInstance // Node instance configuration
 	apiClient      *api.Client
+	hubClient      *api.HubClient // WebSocket Hub client
 	singboxService *singbox.Service
 	statsClient    *stats.Client
 	trafficTracker *singbox.TrafficTracker
@@ -44,6 +45,10 @@ type NodeService struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
+
+	// Hub connection state
+	hubConnected  bool
+	hubDisconnect chan struct{} // Signal when hub disconnects (broadcast via close)
 
 	// TLS certificate paths (auto-generated if not configured)
 	certPath string
@@ -74,7 +79,7 @@ func NewNodeService(cfg *config.Config, nodeInstance config.NodeInstance, logger
 		api.WithTimeout(cfg.GetAPITimeout()),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create API client: %w", err)
+		return nil, fmt.Errorf("create api client: %w", err)
 	}
 
 	// Create traffic statistics client
@@ -135,8 +140,14 @@ func (s *NodeService) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start sing-box: %w", err)
 	}
 
-	// 4. Start scheduled tasks
-	s.startScheduledTasks()
+	// 4. Connect to Hub (WebSocket) or start REST fallback
+	if s.config.IsHubEnabled() {
+		s.wg.Add(1)
+		go s.hubConnectionLoop()
+	} else {
+		// Hub disabled, use REST polling only
+		s.startScheduledTasks()
+	}
 
 	s.logger.Info("Node service started successfully")
 	return nil
@@ -153,10 +164,42 @@ func (s *NodeService) Stop() error {
 	s.logger.Info("Stopping node service...")
 	s.cancel()
 	s.cancel = nil
+	hubClient := s.hubClient
+	s.hubClient = nil
 	s.mu.Unlock()
 
-	// Wait for all goroutines to exit
-	s.wg.Wait()
+	// Close Hub connection with timeout to avoid blocking on lock contention
+	// (Connect() may hold the lock during WebSocket dial)
+	if hubClient != nil {
+		closeDone := make(chan struct{})
+		go func() {
+			if err := hubClient.Close(); err != nil {
+				s.logger.Error("Failed to close hub connection", slog.Any("err", err))
+			}
+			close(closeDone)
+		}()
+
+		select {
+		case <-closeDone:
+			s.logger.Debug("Hub connection closed")
+		case <-time.After(3 * time.Second):
+			s.logger.Warn("Hub close timed out, proceeding with shutdown")
+		}
+	}
+
+	// Wait for all goroutines to exit with timeout
+	wgDone := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(wgDone)
+	}()
+
+	select {
+	case <-wgDone:
+		s.logger.Debug("All goroutines exited")
+	case <-time.After(5 * time.Second):
+		s.logger.Warn("Goroutine wait timed out, forcing shutdown")
+	}
 
 	// Stop sing-box
 	if s.singboxService != nil {
@@ -739,6 +782,452 @@ func (s *NodeService) GetNodeInfo() map[string]interface{} {
 	}
 
 	info["user_count"] = len(s.currentUsers)
+	info["hub_connected"] = s.hubConnected
 
 	return info
+}
+
+// ============================================================================
+// Hub (WebSocket) Connection Management
+// ============================================================================
+
+const (
+	hubInitialBackoff = 1 * time.Second
+	hubMaxBackoff     = 5 * time.Minute
+	hubBackoffFactor  = 2.0
+)
+
+// hubConnectionLoop manages Hub connection with exponential backoff reconnection.
+// When Hub is connected, server pushes config/command updates.
+// When Hub is disconnected, falls back to REST API polling.
+func (s *NodeService) hubConnectionLoop() {
+	defer s.wg.Done()
+
+	s.logger.Info("Starting Hub connection loop...")
+
+	backoff := hubInitialBackoff
+	var restTasksCancel context.CancelFunc
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			if restTasksCancel != nil {
+				restTasksCancel()
+			}
+			return
+		default:
+		}
+
+		// Create new disconnect channel for this connection attempt
+		s.mu.Lock()
+		s.hubDisconnect = make(chan struct{})
+		disconnectCh := s.hubDisconnect
+		s.mu.Unlock()
+
+		// Try to connect to Hub
+		if err := s.connectHub(); err != nil {
+			s.logger.Warn("Hub connection failed, using REST fallback",
+				slog.Any("err", err),
+				slog.Duration("retry_in", backoff),
+			)
+
+			// Start REST fallback if not already running
+			if restTasksCancel == nil {
+				var restCtx context.Context
+				restCtx, restTasksCancel = context.WithCancel(s.ctx)
+				s.startRESTFallback(restCtx)
+			}
+
+			// Wait before retry with exponential backoff
+			select {
+			case <-s.ctx.Done():
+				if restTasksCancel != nil {
+					restTasksCancel()
+				}
+				return
+			case <-time.After(backoff):
+				backoff = time.Duration(float64(backoff) * hubBackoffFactor)
+				if backoff > hubMaxBackoff {
+					backoff = hubMaxBackoff
+				}
+			}
+			continue
+		}
+
+		// Hub connected successfully
+		s.logger.Info("Hub connected, stopping REST fallback")
+		backoff = hubInitialBackoff // Reset backoff on successful connection
+
+		// Stop REST fallback (user sync polling)
+		if restTasksCancel != nil {
+			restTasksCancel()
+			restTasksCancel = nil
+		}
+
+		s.mu.Lock()
+		s.hubConnected = true
+		s.mu.Unlock()
+
+		// Start Hub tasks (status + traffic reporting)
+		// These run while Hub is connected and stop when disconnected
+		s.wg.Add(2)
+		go s.hubStatusLoop(disconnectCh)
+		go s.hubTrafficLoop(disconnectCh)
+
+		// Wait for disconnect signal (channel will be closed by OnDisconnect)
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-disconnectCh:
+			s.logger.Info("Hub disconnected, will reconnect...")
+			s.mu.Lock()
+			s.hubConnected = false
+			s.mu.Unlock()
+		}
+	}
+}
+
+// connectHub creates and connects the Hub client.
+// It respects context cancellation so shutdown can interrupt connection attempts.
+func (s *NodeService) connectHub() error {
+	hubClient, err := api.NewHubClient(
+		s.config.API.BaseURL,
+		s.nodeInstance.Token,
+		s.nodeInstance.SID,
+		s, // NodeService implements HubHandler
+		api.WithPingInterval(s.config.GetHubPingInterval()),
+		api.WithPongWait(s.config.GetHubPongWait()),
+	)
+	if err != nil {
+		return fmt.Errorf("create hub client: %w", err)
+	}
+
+	// Use goroutine to handle Connect so we can respond to context cancellation
+	connectDone := make(chan error, 1)
+	go func() {
+		connectDone <- hubClient.Connect()
+	}()
+
+	select {
+	case <-s.ctx.Done():
+		// Context cancelled during connection attempt, clean up
+		_ = hubClient.Close()
+		return s.ctx.Err()
+	case err := <-connectDone:
+		if err != nil {
+			_ = hubClient.Close()
+			return fmt.Errorf("connect hub: %w", err)
+		}
+	}
+
+	s.mu.Lock()
+	s.hubClient = hubClient
+	s.mu.Unlock()
+
+	s.logger.Info("Hub WebSocket connected successfully")
+	return nil
+}
+
+// hubStatusLoop sends event-driven status updates via Hub WebSocket.
+// Reports are triggered when:
+// 1. Status changes exceed threshold (CPU/Memory change > 5%)
+// 2. Max silent interval reached (heartbeat)
+func (s *NodeService) hubStatusLoop(disconnectCh <-chan struct{}) {
+	defer s.wg.Done()
+
+	sampleInterval := s.config.GetHubSampleInterval()
+	maxSilentInterval := s.config.GetHubMaxSilentInterval()
+	changeThreshold := s.config.GetHubChangeThreshold()
+
+	ticker := time.NewTicker(sampleInterval)
+	defer ticker.Stop()
+
+	var lastStatus *api.NodeStatus
+	var lastReportTime time.Time
+
+	// Send initial status immediately
+	status := s.collectSystemStatus()
+	s.sendHubStatusData(status)
+	lastStatus = status
+	lastReportTime = time.Now()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-disconnectCh:
+			return
+		case <-ticker.C:
+			status := s.collectSystemStatus()
+
+			// Check if we should report
+			shouldReport := false
+			reason := ""
+
+			// Check time since last report
+			timeSinceLastReport := time.Since(lastReportTime)
+			if timeSinceLastReport >= maxSilentInterval {
+				shouldReport = true
+				reason = "heartbeat"
+			}
+
+			// Check for significant changes (CPU and memory only)
+			if lastStatus != nil && !shouldReport {
+				cpuDiff := abs(status.CPUPercent - lastStatus.CPUPercent)
+				memDiff := abs(status.MemoryPercent - lastStatus.MemoryPercent)
+
+				if cpuDiff >= changeThreshold {
+					shouldReport = true
+					reason = fmt.Sprintf("cpu_change:%.1f%%", cpuDiff)
+				} else if memDiff >= changeThreshold {
+					shouldReport = true
+					reason = fmt.Sprintf("mem_change:%.1f%%", memDiff)
+				}
+			}
+
+			if shouldReport {
+				s.logger.Debug("Reporting status",
+					slog.String("reason", reason),
+					slog.Float64("cpu", status.CPUPercent),
+					slog.Float64("mem", status.MemoryPercent),
+				)
+				s.sendHubStatusData(status)
+				lastStatus = status
+				lastReportTime = time.Now()
+			}
+		}
+	}
+}
+
+// abs returns absolute value of a float64
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// hubTrafficLoop sends periodic traffic reports while Hub is connected.
+func (s *NodeService) hubTrafficLoop(disconnectCh <-chan struct{}) {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(s.config.GetTrafficReportInterval())
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-disconnectCh:
+			return
+		case <-ticker.C:
+			if err := s.reportTraffic(); err != nil {
+				s.logger.Error("Failed to report traffic", slog.Any("err", err))
+			}
+		}
+	}
+}
+
+// sendHubStatus sends node status via Hub (collects status internally).
+func (s *NodeService) sendHubStatus() {
+	status := s.collectSystemStatus()
+	s.sendHubStatusData(status)
+}
+
+// sendHubStatusData sends pre-collected status via Hub.
+func (s *NodeService) sendHubStatusData(status *api.NodeStatus) {
+	s.mu.RLock()
+	hubClient := s.hubClient
+	s.mu.RUnlock()
+
+	if hubClient == nil {
+		return
+	}
+
+	if err := hubClient.SendStatus(status); err != nil {
+		s.logger.Warn("Failed to send status via hub", slog.Any("err", err))
+	}
+}
+
+// startRESTFallback starts REST API polling as fallback when Hub is disconnected.
+func (s *NodeService) startRESTFallback(ctx context.Context) {
+	s.logger.Info("Starting REST fallback tasks...")
+
+	// User synchronization task
+	s.wg.Add(1)
+	go s.scheduleTaskWithContext(ctx, "REST: User sync", s.config.GetUserSyncInterval(), func() error {
+		return s.syncUsers()
+	})
+
+	// Traffic report task
+	s.wg.Add(1)
+	go s.scheduleTaskWithContext(ctx, "REST: Traffic report", s.config.GetTrafficReportInterval(), func() error {
+		return s.reportTraffic()
+	})
+
+	// Status report task
+	s.wg.Add(1)
+	go s.scheduleTaskWithContext(ctx, "REST: Status report", s.config.GetStatusReportInterval(), func() error {
+		return s.reportStatus()
+	})
+}
+
+// scheduleTaskWithContext is like scheduleTask but uses a provided context.
+func (s *NodeService) scheduleTaskWithContext(ctx context.Context, name string, interval time.Duration, task func() error) {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	s.logger.Info("Scheduled task started", slog.String("name", name), slog.Duration("interval", interval))
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Info("Scheduled task stopped", slog.String("name", name))
+			return
+
+		case <-ticker.C:
+			if err := task(); err != nil {
+				s.logger.Error("Scheduled task failed", slog.String("name", name), slog.Any("err", err))
+
+				if errors.Is(err, api.ErrUnauthorized) {
+					s.logger.Error("Authentication failed, stopping service")
+					s.cancel()
+					return
+				}
+			}
+		}
+	}
+}
+
+// ============================================================================
+// HubHandler Interface Implementation
+// ============================================================================
+
+// OnCommand handles commands from the server via Hub.
+func (s *NodeService) OnCommand(cmd *api.CommandData) {
+	s.logger.Info("Received command from hub",
+		slog.String("command_id", cmd.CommandID),
+		slog.String("action", cmd.Action),
+	)
+
+	switch cmd.Action {
+	case api.CmdActionReloadConfig:
+		s.logger.Info("Executing reload config command")
+		go func() {
+			if err := s.fetchNodeConfig(); err != nil {
+				s.logger.Error("Failed to reload config", slog.Any("err", err))
+				return
+			}
+			if err := s.syncUsers(); err != nil {
+				s.logger.Error("Failed to sync users", slog.Any("err", err))
+				return
+			}
+			if err := s.reloadSingbox(); err != nil {
+				s.logger.Error("Failed to reload singbox", slog.Any("err", err))
+				return
+			}
+			s.logger.Info("Config reloaded successfully via hub command")
+		}()
+
+	case api.CmdActionRestart:
+		s.logger.Info("Executing restart command")
+		go func() {
+			if err := s.reloadSingbox(); err != nil {
+				s.logger.Error("Failed to restart singbox", slog.Any("err", err))
+			}
+		}()
+
+	case api.CmdActionStop:
+		s.logger.Warn("Received stop command from hub")
+		go s.Stop()
+
+	default:
+		s.logger.Warn("Unknown command action", slog.String("action", cmd.Action))
+	}
+}
+
+// OnConfigSync handles config sync from the server via Hub.
+func (s *NodeService) OnConfigSync(sync *api.ConfigSyncData) {
+	s.logger.Info("Received config sync from hub",
+		slog.Uint64("version", sync.Version),
+		slog.Bool("full_sync", sync.FullSync),
+	)
+
+	if sync.Config == nil {
+		s.logger.Debug("Config sync has no config data, fetching via REST")
+		go func() {
+			if err := s.fetchNodeConfig(); err != nil {
+				s.logger.Error("Failed to fetch config after sync notification", slog.Any("err", err))
+				return
+			}
+			if err := s.syncUsers(); err != nil {
+				s.logger.Error("Failed to sync users after config sync", slog.Any("err", err))
+				return
+			}
+			if err := s.reloadSingbox(); err != nil {
+				s.logger.Error("Failed to reload singbox after config sync", slog.Any("err", err))
+			}
+		}()
+		return
+	}
+
+	// Apply config from Hub directly
+	s.mu.Lock()
+	s.nodeConfig = s.convertHubConfigToNodeConfig(sync.Config)
+	s.mu.Unlock()
+
+	s.logger.Info("Config updated from hub sync",
+		slog.String("node_sid", sync.Config.NodeSID),
+		slog.String("protocol", sync.Config.Protocol),
+	)
+
+	// Reload sing-box with new config
+	go func() {
+		if err := s.syncUsers(); err != nil {
+			s.logger.Error("Failed to sync users after hub config sync", slog.Any("err", err))
+			return
+		}
+		if err := s.reloadSingbox(); err != nil {
+			s.logger.Error("Failed to reload singbox after hub config sync", slog.Any("err", err))
+		}
+	}()
+}
+
+// convertHubConfigToNodeConfig converts Hub ConfigData to NodeConfig.
+func (s *NodeService) convertHubConfigToNodeConfig(hubConfig *api.ConfigData) *api.NodeConfig {
+	return &api.NodeConfig{
+		NodeSID:           hubConfig.NodeSID,
+		Protocol:          hubConfig.Protocol,
+		ServerHost:        hubConfig.ServerHost,
+		ServerPort:        hubConfig.ServerPort,
+		EncryptionMethod:  hubConfig.EncryptionMethod,
+		ServerKey:         hubConfig.ServerKey,
+		TransportProtocol: hubConfig.TransportProtocol,
+		Host:              hubConfig.Host,
+		Path:              hubConfig.Path,
+		ServiceName:       hubConfig.ServiceName,
+		SNI:               hubConfig.SNI,
+		AllowInsecure:     hubConfig.AllowInsecure,
+	}
+}
+
+// OnError handles errors from the Hub connection.
+func (s *NodeService) OnError(err error) {
+	s.logger.Error("Hub error", slog.Any("err", err))
+}
+
+// OnDisconnect handles Hub disconnection.
+func (s *NodeService) OnDisconnect() {
+	s.logger.Warn("Hub disconnected")
+
+	s.mu.Lock()
+	s.hubClient = nil
+	// Close channel to broadcast disconnect to all listeners
+	if s.hubDisconnect != nil {
+		close(s.hubDisconnect)
+		s.hubDisconnect = nil
+	}
+	s.mu.Unlock()
 }
