@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,9 +18,20 @@ import (
 var (
 	version   = "dev"
 	buildTime = "unknown"
+
+	showVersion = flag.Bool("v", false, "show version and exit")
 )
 
 func main() {
+	// Parse flags early to check for -v
+	flag.Parse()
+
+	// Handle -v flag
+	if *showVersion {
+		fmt.Printf("orrisp version %s (built %s)\n", version, buildTime)
+		return
+	}
+
 	// Print version information
 	fmt.Printf("Orrisp Node Agent\n")
 	fmt.Printf("Version: %s\n", version)

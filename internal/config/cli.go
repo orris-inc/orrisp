@@ -19,42 +19,48 @@ func (n *nodeFlags) Set(value string) error {
 }
 
 var (
-	// Config file
-	configPath = flag.String("c", "", "configuration file path")
-
-	// CLI flags
-	apiURL   = flag.String("api-url", "", "API base URL")
-	nodes    nodeFlags
-	logLevel = flag.String("log-level", "info", "log level: debug, info, warn, error")
+	configPath string
+	apiURL     string
+	logLevel   string
+	nodes      nodeFlags
 )
 
 func init() {
-	flag.Var(&nodes, "node", "node configuration in format 'sid:token' (can be specified multiple times)")
+	// -c: config file path
+	flag.StringVar(&configPath, "c", "", "config file path")
+
+	// --api-url: API base URL (required when using CLI mode)
+	flag.StringVar(&apiURL, "api-url", "", "API base URL")
+
+	// -l, --log-level: log level
+	flag.StringVar(&logLevel, "l", "info", "log level: debug, info, warn, error")
+	flag.StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
+
+	// --node: node configuration (can be specified multiple times)
+	flag.Var(&nodes, "node", "node config as 'sid:token' (repeatable)")
 }
 
-// LoadFromCLI loads configuration from CLI flags or config file
+// LoadFromCLI loads configuration from CLI flags or config file.
 // Priority: CLI flags > config file
 func LoadFromCLI() (*Config, error) {
-	flag.Parse()
-
 	// Check if CLI flags are provided
-	if *apiURL != "" && len(nodes) > 0 {
+	if apiURL != "" && len(nodes) > 0 {
 		return buildConfigFromCLI()
 	}
 
 	// Fall back to config file
-	configFile := *configPath
+	configFile := configPath
 	if configFile == "" {
 		configFile = "configs/config.yaml"
 	}
 	return Load(configFile)
 }
 
-// buildConfigFromCLI builds configuration from CLI flags
+// buildConfigFromCLI builds configuration from CLI flags.
 func buildConfigFromCLI() (*Config, error) {
 	cfg := DefaultConfig()
-	cfg.API.BaseURL = *apiURL
-	cfg.Log.Level = *logLevel
+	cfg.API.BaseURL = apiURL
+	cfg.Log.Level = logLevel
 
 	for _, n := range nodes {
 		parts := strings.SplitN(n, ":", 2)
