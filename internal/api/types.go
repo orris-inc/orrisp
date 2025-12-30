@@ -8,23 +8,102 @@ package api
 // NodeConfig represents the node configuration returned by the API.
 // Compatible with sing-box inbound configuration.
 type NodeConfig struct {
-	NodeSID           string `json:"node_id"`                     // Node SID (Stripe-style: node_xxx)
-	Protocol          string `json:"protocol"`                    // shadowsocks or trojan
-	ServerHost        string `json:"server_host"`                 // Server hostname or IP address
-	ServerPort        int    `json:"server_port"`                 // Server port number
-	EncryptionMethod  string `json:"encryption_method,omitempty"` // Encryption method for Shadowsocks
-	ServerKey         string `json:"server_key,omitempty"`        // Server password for SS
-	TransportProtocol string `json:"transport_protocol"`          // Transport protocol (tcp, ws, grpc)
-	Host              string `json:"host,omitempty"`              // WebSocket host header
-	Path              string `json:"path,omitempty"`              // WebSocket path
-	ServiceName       string `json:"service_name,omitempty"`      // gRPC service name
-	SNI               string `json:"sni,omitempty"`               // TLS Server Name Indication
-	AllowInsecure     bool   `json:"allow_insecure"`              // Allow insecure TLS connection
-	EnableVless       bool   `json:"enable_vless"`
-	EnableXTLS        bool   `json:"enable_xtls"`
-	SpeedLimit        uint64 `json:"speed_limit"`
-	DeviceLimit       int    `json:"device_limit"`
-	RuleListPath      string `json:"rule_list_path,omitempty"`
+	NodeSID           string       `json:"node_id"`                     // Node SID (Stripe-style: node_xxx)
+	Protocol          string       `json:"protocol"`                    // shadowsocks or trojan
+	ServerHost        string       `json:"server_host"`                 // Server hostname or IP address
+	ServerPort        int          `json:"server_port"`                 // Server port number
+	EncryptionMethod  string       `json:"encryption_method,omitempty"` // Encryption method for Shadowsocks
+	ServerKey         string       `json:"server_key,omitempty"`        // Server password for SS
+	TransportProtocol string       `json:"transport_protocol"`          // Transport protocol (tcp, ws, grpc)
+	Host              string       `json:"host,omitempty"`              // WebSocket host header
+	Path              string       `json:"path,omitempty"`              // WebSocket path
+	ServiceName       string       `json:"service_name,omitempty"`      // gRPC service name
+	SNI               string       `json:"sni,omitempty"`               // TLS Server Name Indication
+	AllowInsecure     bool         `json:"allow_insecure"`              // Allow insecure TLS connection
+	EnableVless       bool         `json:"enable_vless"`
+	EnableXTLS        bool         `json:"enable_xtls"`
+	SpeedLimit        uint64       `json:"speed_limit"`
+	DeviceLimit       int          `json:"device_limit"`
+	RuleListPath      string       `json:"rule_list_path,omitempty"` // Deprecated: use Route instead
+	Route             *RouteConfig `json:"route,omitempty"`          // Routing configuration for traffic splitting
+	Outbounds         []Outbound   `json:"outbounds,omitempty"`      // Outbound configs for nodes referenced in route rules
+}
+
+// Outbound represents a sing-box outbound configuration.
+// Used when route rules reference other nodes as outbounds.
+type Outbound struct {
+	Type   string `json:"type"`        // Protocol type: shadowsocks, trojan, direct, block
+	Tag    string `json:"tag"`         // Unique identifier for the outbound (node SID)
+	Server string `json:"server"`      // Server hostname or IP address
+	Port   int    `json:"server_port"` // Server port number
+
+	// Shadowsocks specific fields
+	Method     string `json:"method,omitempty"`      // Encryption method for SS
+	Password   string `json:"password,omitempty"`    // Password for SS/Trojan
+	Plugin     string `json:"plugin,omitempty"`      // SIP003 plugin name
+	PluginOpts string `json:"plugin_opts,omitempty"` // Plugin options string
+
+	// TLS fields (for Trojan)
+	TLS *OutboundTLS `json:"tls,omitempty"` // TLS configuration
+
+	// Transport fields (for Trojan ws/grpc)
+	Transport *OutboundTransport `json:"transport,omitempty"` // Transport configuration
+}
+
+// OutboundTLS represents TLS configuration for outbound.
+type OutboundTLS struct {
+	Enabled    bool     `json:"enabled"`               // Enable TLS
+	ServerName string   `json:"server_name,omitempty"` // SNI
+	Insecure   bool     `json:"insecure,omitempty"`    // Allow insecure TLS
+	DisableSNI bool     `json:"disable_sni,omitempty"` // Disable SNI
+	ALPN       []string `json:"alpn,omitempty"`        // ALPN protocols
+}
+
+// OutboundTransport represents transport configuration for outbound.
+type OutboundTransport struct {
+	Type        string            `json:"type"`                   // Transport type: ws, grpc
+	Path        string            `json:"path,omitempty"`         // WebSocket path
+	Headers     map[string]string `json:"headers,omitempty"`      // Custom headers for WS
+	ServiceName string            `json:"service_name,omitempty"` // gRPC service name
+}
+
+// RouteConfig represents the routing configuration for sing-box.
+// It defines how traffic should be routed based on matching rules.
+type RouteConfig struct {
+	Rules []RouteRule `json:"rules,omitempty"` // Ordered list of routing rules
+	Final string      `json:"final"`           // Default outbound when no rules match (direct/block/proxy or node_xxx)
+}
+
+// RouteRule represents a single routing rule, compatible with sing-box route rule.
+type RouteRule struct {
+	// Domain matching
+	Domain        []string `json:"domain,omitempty"`         // Exact domain match
+	DomainSuffix  []string `json:"domain_suffix,omitempty"`  // Domain suffix match
+	DomainKeyword []string `json:"domain_keyword,omitempty"` // Domain keyword match
+	DomainRegex   []string `json:"domain_regex,omitempty"`   // Domain regex match
+
+	// IP matching
+	IPCIDR       []string `json:"ip_cidr,omitempty"`        // Destination IP CIDR match
+	SourceIPCIDR []string `json:"source_ip_cidr,omitempty"` // Source IP CIDR match
+	IPIsPrivate  bool     `json:"ip_is_private,omitempty"`  // Match private/LAN IP addresses
+
+	// GeoIP/GeoSite matching
+	GeoIP   []string `json:"geoip,omitempty"`   // GeoIP country codes (cn, us, etc.)
+	GeoSite []string `json:"geosite,omitempty"` // GeoSite categories (cn, google, etc.)
+
+	// Port matching
+	Port       []int `json:"port,omitempty"`        // Destination port match
+	SourcePort []int `json:"source_port,omitempty"` // Source port match
+
+	// Protocol/Network matching
+	Protocol []string `json:"protocol,omitempty"` // Sniffed protocol match (http, tls, etc.)
+	Network  []string `json:"network,omitempty"`  // Network type match (tcp, udp)
+
+	// Rule set reference
+	RuleSet []string `json:"rule_set,omitempty"` // Rule set references
+
+	// Action
+	Outbound string `json:"outbound"` // Action: direct/block/proxy or node_xxx (for routing to specific node)
 }
 
 // IsTrojan returns true if the node is configured for Trojan protocol.

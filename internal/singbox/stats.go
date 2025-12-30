@@ -71,7 +71,7 @@ func (c *StatsClient) GetConnections(ctx context.Context) ([]Connection, error) 
 // GetConnectionsWithTotal gets active connections list and total traffic statistics
 func (c *StatsClient) GetConnectionsWithTotal(ctx context.Context) (*ClashConnectionsResponse, error) {
 	if c.clashAPIAddr == "" {
-		return nil, fmt.Errorf("Clash API address not configured")
+		return nil, fmt.Errorf("clash API address not configured")
 	}
 
 	// Build request URL
@@ -107,7 +107,7 @@ func (c *StatsClient) GetConnectionsWithTotal(ctx context.Context) (*ClashConnec
 // CloseConnection closes specified connection
 func (c *StatsClient) CloseConnection(ctx context.Context, connectionID string) error {
 	if c.clashAPIAddr == "" {
-		return fmt.Errorf("Clash API address not configured")
+		return fmt.Errorf("clash API address not configured")
 	}
 
 	// Build request URL

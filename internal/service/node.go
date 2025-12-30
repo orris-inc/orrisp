@@ -1028,12 +1028,6 @@ func (s *NodeService) hubTrafficLoop(disconnectCh <-chan struct{}) {
 	}
 }
 
-// sendHubStatus sends node status via Hub (collects status internally).
-func (s *NodeService) sendHubStatus() {
-	status := s.collectSystemStatus()
-	s.sendHubStatusData(status)
-}
-
 // sendHubStatusData sends pre-collected status via Hub.
 func (s *NodeService) sendHubStatusData(status *api.NodeStatus) {
 	s.mu.RLock()
@@ -1210,6 +1204,8 @@ func (s *NodeService) convertHubConfigToNodeConfig(hubConfig *api.ConfigData) *a
 		ServiceName:       hubConfig.ServiceName,
 		SNI:               hubConfig.SNI,
 		AllowInsecure:     hubConfig.AllowInsecure,
+		Route:             hubConfig.Route,
+		Outbounds:         hubConfig.Outbounds,
 	}
 }
 
