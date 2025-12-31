@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -19,12 +21,31 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
-// Package-level version variable, set by main package
-var agentVersion = "dev"
+// Package-level version variable, set by main package (atomic for concurrent access)
+var agentVersion atomic.Value
+
+func init() {
+	agentVersion.Store("dev")
+}
 
 // SetAgentVersion sets the agent version for status reporting.
 func SetAgentVersion(v string) {
-	agentVersion = v
+	agentVersion.Store(v)
+}
+
+// getAgentVersion returns the current agent version.
+func getAgentVersion() string {
+	return agentVersion.Load().(string)
+}
+
+// cancelService safely cancels the service context with lock protection.
+// This prevents nil pointer panic when called concurrently with Stop().
+func (s *NodeService) cancelService() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // NodeService node service
@@ -51,8 +72,10 @@ type NodeService struct {
 	hubDisconnect chan struct{} // Signal when hub disconnects (broadcast via close)
 
 	// TLS certificate paths (auto-generated if not configured)
-	certPath string
-	keyPath  string
+	certPath     string
+	keyPath      string
+	certInitOnce sync.Once
+	certInitErr  error
 
 	// Cached public IP addresses
 	cachedPublicIPv4 string
@@ -447,7 +470,7 @@ func (s *NodeService) collectSystemStatus() *api.NodeStatus {
 		DiskTotal:   diskTotal,
 
 		// Uptime
-		UptimeSeconds: time.Since(s.startTime).Milliseconds() / 1000,
+		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
 
 		// Load average
 		LoadAvg1:  sysStats.LoadAvg1,
@@ -469,7 +492,9 @@ func (s *NodeService) collectSystemStatus() *api.NodeStatus {
 		PublicIPv6: ipv6,
 
 		// Agent info
-		AgentVersion: agentVersion,
+		AgentVersion: getAgentVersion(),
+		Platform:     runtime.GOOS,
+		Arch:         runtime.GOARCH,
 	}
 }
 
@@ -639,13 +664,21 @@ func (s *NodeService) generateSingboxOptions() (*option.Options, error) {
 	return options, nil
 }
 
-// ensureTLSCert ensures TLS certificate exists, generates self-signed if not configured
+// ensureTLSCert ensures TLS certificate exists, generates self-signed if not configured.
+// This method is safe for concurrent access using sync.Once.
 func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
-	// Use cached paths if already generated
-	if s.certPath != "" && s.keyPath != "" {
-		return s.certPath, s.keyPath, nil
-	}
+	s.certInitOnce.Do(func() {
+		s.certInitErr = s.initTLSCert(sni)
+	})
 
+	if s.certInitErr != nil {
+		return "", "", s.certInitErr
+	}
+	return s.certPath, s.keyPath, nil
+}
+
+// initTLSCert initializes TLS certificate paths. Called once via sync.Once.
+func (s *NodeService) initTLSCert(sni string) error {
 	// Use configured paths if available (check node instance first)
 	if s.nodeInstance.CertPath != "" && s.nodeInstance.KeyPath != "" {
 		s.certPath = s.nodeInstance.CertPath
@@ -654,7 +687,7 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 			slog.String("cert_path", s.certPath),
 			slog.String("key_path", s.keyPath),
 		)
-		return s.certPath, s.keyPath, nil
+		return nil
 	}
 
 	// Generate self-signed certificate (use node SID in path for multi-node support)
@@ -672,6 +705,9 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 			slog.Any("err", err),
 		)
 		certDir = tempDir
+		if err := os.MkdirAll(certDir, 0700); err != nil {
+			return fmt.Errorf("failed to create cert directory: %w", err)
+		}
 	}
 
 	s.logger.Info("Generating self-signed TLS certificate",
@@ -680,7 +716,7 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 	)
 	selfSigned, err := cert.GenerateSelfSigned(certDir, sni)
 	if err != nil {
-		return "", "", err
+		return err
 	}
 
 	s.certPath = selfSigned.CertPath
@@ -691,7 +727,7 @@ func (s *NodeService) ensureTLSCert(sni string) (string, string, error) {
 		slog.String("algorithm", "Ed25519"),
 	)
 
-	return s.certPath, s.keyPath, nil
+	return nil
 }
 
 // startScheduledTasks starts scheduled tasks
@@ -758,7 +794,7 @@ func (s *NodeService) scheduleTask(name string, interval time.Duration, task fun
 				// Stop service on authentication failure (401)
 				if errors.Is(err, api.ErrUnauthorized) {
 					s.logger.Error("Authentication failed, stopping service due to invalid token")
-					s.cancel()
+					s.cancelService()
 					return
 				}
 			}
@@ -1087,7 +1123,7 @@ func (s *NodeService) scheduleTaskWithContext(ctx context.Context, name string, 
 
 				if errors.Is(err, api.ErrUnauthorized) {
 					s.logger.Error("Authentication failed, stopping service")
-					s.cancel()
+					s.cancelService()
 					return
 				}
 			}
@@ -1136,6 +1172,10 @@ func (s *NodeService) OnCommand(cmd *api.CommandData) {
 	case api.CmdActionStop:
 		s.logger.Warn("Received stop command from hub")
 		go s.Stop()
+
+	case cmdActionUpdate:
+		s.logger.Info("Executing update command")
+		go s.handleUpdate(cmd)
 
 	default:
 		s.logger.Warn("Unknown command action", slog.String("action", cmd.Action))
