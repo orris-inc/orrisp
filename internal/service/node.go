@@ -1173,7 +1173,7 @@ func (s *NodeService) OnCommand(cmd *api.CommandData) {
 		s.logger.Warn("Received stop command from hub")
 		go s.Stop()
 
-	case cmdActionUpdate:
+	case api.CmdActionUpdate:
 		s.logger.Info("Executing update command")
 		go s.handleUpdate(cmd)
 

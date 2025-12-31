@@ -16,16 +16,6 @@ import (
 	"github.com/easayliu/orrisp/internal/api"
 )
 
-// Command action for update (not in SDK yet)
-const cmdActionUpdate = "update"
-
-// updatePayload represents the update command payload from hub.
-type updatePayload struct {
-	DownloadURL string `json:"download_url"` // Full URL to download new binary
-	Checksum    string `json:"checksum"`     // Checksum in format "sha256:hexstring"
-	Version     string `json:"version"`      // Target version string
-}
-
 // handleUpdate handles the update command from hub.
 // It downloads the new binary, verifies checksum, and replaces the current executable.
 func (s *NodeService) handleUpdate(cmd *api.CommandData) {
@@ -136,7 +126,7 @@ func (s *NodeService) handleUpdate(cmd *api.CommandData) {
 }
 
 // parseUpdatePayload parses the update payload from command data.
-func parseUpdatePayload(payload any) (*updatePayload, error) {
+func parseUpdatePayload(payload any) (*api.UpdatePayload, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("payload is nil")
 	}
@@ -147,7 +137,7 @@ func parseUpdatePayload(payload any) (*updatePayload, error) {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	var p updatePayload
+	var p api.UpdatePayload
 	if err := json.Unmarshal(jsonBytes, &p); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}

@@ -34,6 +34,7 @@ const (
 	CmdActionReloadConfig = "reload_config"
 	CmdActionRestart      = "restart"
 	CmdActionStop         = "stop"
+	CmdActionUpdate       = "update" // Update agent binary
 )
 
 // Event type constants.
