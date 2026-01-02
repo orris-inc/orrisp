@@ -214,7 +214,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=${CONFIG_DIR} ${CERT_DIR}
+ReadWritePaths=${CONFIG_DIR} ${CERT_DIR} ${INSTALL_DIR}
 
 [Install]
 WantedBy=multi-user.target
