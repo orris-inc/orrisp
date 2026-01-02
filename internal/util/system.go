@@ -812,7 +812,9 @@ func (m *SystemMonitor) collectVMStats(stats *SystemStats) {
 func (m *SystemMonitor) collectEntropyStats(stats *SystemStats) {
 	// Read from /proc/sys/kernel/random/entropy_avail
 	if data, err := m.fs.SysctlInts("kernel/random/entropy_avail"); err == nil && len(data) > 0 {
-		stats.EntropyAvailable = uint64(data[0])
+		if data[0] >= 0 {
+			stats.EntropyAvailable = uint64(data[0])
+		}
 	}
 }
 
