@@ -458,16 +458,33 @@ func (s *NodeService) collectSystemStatus() *api.NodeStatus {
 		// CPU
 		CPUPercent: sysStats.CPUPercent,
 
+		// CPU details
+		CPUCores:     sysStats.CPUCores,
+		CPUModelName: sysStats.CPUModelName,
+		CPUMHz:       sysStats.CPUMHz,
+
 		// Memory
 		MemoryPercent: sysStats.MemoryPercent,
 		MemoryUsed:    sysStats.MemoryUsed,
 		MemoryTotal:   sysStats.MemoryTotal,
 		MemoryAvail:   sysStats.MemoryAvail,
 
+		// Swap memory
+		SwapTotal:   sysStats.SwapTotal,
+		SwapUsed:    sysStats.SwapUsed,
+		SwapPercent: sysStats.SwapPercent,
+
 		// Disk
 		DiskPercent: diskPercent,
 		DiskUsed:    diskUsed,
 		DiskTotal:   diskTotal,
+
+		// Disk I/O
+		DiskReadBytes:  sysStats.DiskReadBytes,
+		DiskWriteBytes: sysStats.DiskWriteBytes,
+		DiskReadRate:   sysStats.DiskReadRate,
+		DiskWriteRate:  sysStats.DiskWriteRate,
+		DiskIOPS:       sysStats.DiskIOPS,
 
 		// Uptime
 		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
@@ -483,9 +500,59 @@ func (s *NodeService) collectSystemStatus() *api.NodeStatus {
 		NetworkRxRate:  sysStats.NetworkRxRate,
 		NetworkTxRate:  sysStats.NetworkTxRate,
 
+		// Network extended stats
+		NetworkRxPackets: sysStats.NetworkRxPackets,
+		NetworkTxPackets: sysStats.NetworkTxPackets,
+		NetworkRxErrors:  sysStats.NetworkRxErrors,
+		NetworkTxErrors:  sysStats.NetworkTxErrors,
+		NetworkRxDropped: sysStats.NetworkRxDropped,
+		NetworkTxDropped: sysStats.NetworkTxDropped,
+
 		// Connections
 		TCPConnections: sysStats.TCPConnections,
 		UDPConnections: sysStats.UDPConnections,
+
+		// Socket statistics
+		SocketsUsed:      sysStats.SocketsUsed,
+		SocketsTCPInUse:  sysStats.SocketsTCPInUse,
+		SocketsUDPInUse:  sysStats.SocketsUDPInUse,
+		SocketsTCPOrphan: sysStats.SocketsTCPOrphan,
+		SocketsTCPTW:     sysStats.SocketsTCPTW,
+
+		// PSI (Pressure Stall Information)
+		PSICPUSome:    sysStats.PSICPUSome,
+		PSICPUFull:    sysStats.PSICPUFull,
+		PSIMemorySome: sysStats.PSIMemorySome,
+		PSIMemoryFull: sysStats.PSIMemoryFull,
+		PSIIOSome:     sysStats.PSIIOSome,
+		PSIIOFull:     sysStats.PSIIOFull,
+
+		// Process statistics
+		ProcessesTotal:   sysStats.ProcessesTotal,
+		ProcessesRunning: sysStats.ProcessesRunning,
+		ProcessesBlocked: sysStats.ProcessesBlocked,
+
+		// File descriptors
+		FileNrAllocated: sysStats.FileNrAllocated,
+		FileNrMax:       sysStats.FileNrMax,
+
+		// Context switches and interrupts
+		ContextSwitches: sysStats.ContextSwitches,
+		Interrupts:      sysStats.Interrupts,
+
+		// Kernel info
+		KernelVersion: sysStats.KernelVersion,
+		Hostname:      sysStats.Hostname,
+
+		// Virtual memory statistics
+		VMPageIn:  sysStats.VMPageIn,
+		VMPageOut: sysStats.VMPageOut,
+		VMSwapIn:  sysStats.VMSwapIn,
+		VMSwapOut: sysStats.VMSwapOut,
+		VMOOMKill: sysStats.VMOOMKill,
+
+		// Entropy pool
+		EntropyAvailable: sysStats.EntropyAvailable,
 
 		// Network info
 		PublicIPv4: ipv4,
