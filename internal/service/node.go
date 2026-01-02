@@ -964,28 +964,19 @@ func (s *NodeService) connectHub() error {
 	return nil
 }
 
-// hubStatusLoop sends event-driven status updates via Hub WebSocket.
-// Reports are triggered when:
-// 1. Status changes exceed threshold (CPU/Memory change > 5%)
-// 2. Max silent interval reached (heartbeat)
+// hubStatusLoop sends periodic status updates via Hub WebSocket.
+// Reports are sent every sample interval (default 1 second).
 func (s *NodeService) hubStatusLoop(disconnectCh <-chan struct{}) {
 	defer s.wg.Done()
 
 	sampleInterval := s.config.GetHubSampleInterval()
-	maxSilentInterval := s.config.GetHubMaxSilentInterval()
-	changeThreshold := s.config.GetHubChangeThreshold()
 
 	ticker := time.NewTicker(sampleInterval)
 	defer ticker.Stop()
 
-	var lastStatus *api.NodeStatus
-	var lastReportTime time.Time
-
 	// Send initial status immediately
 	status := s.collectSystemStatus()
 	s.sendHubStatusData(status)
-	lastStatus = status
-	lastReportTime = time.Now()
 
 	for {
 		select {
@@ -995,52 +986,9 @@ func (s *NodeService) hubStatusLoop(disconnectCh <-chan struct{}) {
 			return
 		case <-ticker.C:
 			status := s.collectSystemStatus()
-
-			// Check if we should report
-			shouldReport := false
-			reason := ""
-
-			// Check time since last report
-			timeSinceLastReport := time.Since(lastReportTime)
-			if timeSinceLastReport >= maxSilentInterval {
-				shouldReport = true
-				reason = "heartbeat"
-			}
-
-			// Check for significant changes (CPU and memory only)
-			if lastStatus != nil && !shouldReport {
-				cpuDiff := abs(status.CPUPercent - lastStatus.CPUPercent)
-				memDiff := abs(status.MemoryPercent - lastStatus.MemoryPercent)
-
-				if cpuDiff >= changeThreshold {
-					shouldReport = true
-					reason = fmt.Sprintf("cpu_change:%.1f%%", cpuDiff)
-				} else if memDiff >= changeThreshold {
-					shouldReport = true
-					reason = fmt.Sprintf("mem_change:%.1f%%", memDiff)
-				}
-			}
-
-			if shouldReport {
-				s.logger.Debug("Reporting status",
-					slog.String("reason", reason),
-					slog.Float64("cpu", status.CPUPercent),
-					slog.Float64("mem", status.MemoryPercent),
-				)
-				s.sendHubStatusData(status)
-				lastStatus = status
-				lastReportTime = time.Now()
-			}
+			s.sendHubStatusData(status)
 		}
 	}
-}
-
-// abs returns absolute value of a float64
-func abs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
 
 // hubTrafficLoop sends periodic traffic reports while Hub is connected.

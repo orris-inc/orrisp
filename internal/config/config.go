@@ -28,7 +28,7 @@ type HubConfig struct {
 	Enabled           bool    `yaml:"enabled"`             // Enable Hub connection
 	PingInterval      int     `yaml:"ping_interval"`       // Ping interval (seconds)
 	PongWait          int     `yaml:"pong_wait"`           // Pong wait timeout (seconds)
-	SampleInterval    int     `yaml:"sample_interval"`     // Status sampling interval (seconds), default 2
+	SampleInterval    int     `yaml:"sample_interval"`     // Status sampling interval (seconds), default 1
 	MaxSilentInterval int     `yaml:"max_silent_interval"` // Max time without status report (seconds), default 30
 	ChangeThreshold   float64 `yaml:"change_threshold"`    // Change threshold to trigger report (percent), default 5.0
 }
@@ -66,7 +66,7 @@ func DefaultConfig() *Config {
 			Enabled:           true, // Default: use WebSocket, fallback to REST on disconnect
 			PingInterval:      30,
 			PongWait:          60,
-			SampleInterval:    2,   // Sample every 2 seconds
+			SampleInterval:    1,   // Sample and report every 1 second
 			MaxSilentInterval: 30,  // Report at least every 30 seconds
 			ChangeThreshold:   5.0, // Report when change exceeds 5%
 		},
@@ -199,7 +199,7 @@ func (c *Config) GetHubPongWait() time.Duration {
 // GetHubSampleInterval gets Hub status sampling interval
 func (c *Config) GetHubSampleInterval() time.Duration {
 	if c.Hub.SampleInterval <= 0 {
-		return 2 * time.Second
+		return 1 * time.Second
 	}
 	return time.Duration(c.Hub.SampleInterval) * time.Second
 }
