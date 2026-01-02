@@ -51,17 +51,21 @@ detect_platform() {
     local os=$(uname -s | tr '[:upper:]' '[:lower:]')
     local arch=$(uname -m)
 
-    if [ "$os" != "linux" ]; then
-        print_error "Unsupported operating system: $os. Only Linux is supported."
-        exit 1
-    fi
+    case "$os" in
+        linux|darwin)
+            ;;
+        *)
+            print_error "Unsupported operating system: $os. Only Linux and macOS are supported."
+            exit 1
+            ;;
+    esac
 
     case "$arch" in
         x86_64|amd64)
-            PLATFORM="linux-amd64"
+            PLATFORM="${os}-amd64"
             ;;
         aarch64|arm64)
-            PLATFORM="linux-arm64"
+            PLATFORM="${os}-arm64"
             ;;
         *)
             print_error "Unsupported architecture: $arch. Only amd64 and arm64 are supported."
@@ -90,10 +94,9 @@ get_latest_version() {
 # Download binary with retry
 download_binary() {
     local version="$1"
-    local archive_name="${BINARY_NAME}-${PLATFORM}.tar.gz"
-    local download_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${archive_name}"
-    local temp_file="/tmp/${archive_name}"
-    local temp_dir="/tmp/${BINARY_NAME}-extract"
+    local binary_name="${BINARY_NAME}-${PLATFORM}"
+    local download_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/${binary_name}"
+    local temp_file="/tmp/${binary_name}"
 
     print_info "Downloading ${BINARY_NAME} ${version} for ${PLATFORM}..."
 
@@ -104,33 +107,14 @@ download_binary() {
 
         if curl -fL --connect-timeout ${CONNECT_TIMEOUT} --max-time ${DOWNLOAD_TIMEOUT} \
             -o "$temp_file" "$download_url"; then
-            print_info "Extracting binary..."
-            rm -rf "$temp_dir"
-            mkdir -p "$temp_dir"
-
-            if tar -xzf "$temp_file" -C "$temp_dir"; then
-                # Find the binary in extracted files (may be named orrisp or orrisp-platform)
-                local extracted_binary=$(find "$temp_dir" -name "${BINARY_NAME}*" -type f | head -1)
-                if [ -z "$extracted_binary" ]; then
-                    print_error "Binary not found in archive"
-                    rm -rf "$temp_file" "$temp_dir"
-                    exit 1
-                fi
-
-                chmod +x "$extracted_binary"
-                mv "$extracted_binary" "${INSTALL_DIR}/${BINARY_NAME}"
-                rm -rf "$temp_file" "$temp_dir"
-                print_info "Binary downloaded and extracted successfully"
-                return 0
-            else
-                print_warn "Failed to extract archive"
-                rm -rf "$temp_file" "$temp_dir"
-            fi
+            chmod +x "$temp_file"
+            mv "$temp_file" "${INSTALL_DIR}/${BINARY_NAME}"
+            print_info "Binary downloaded successfully"
+            return 0
         fi
 
         print_warn "Download attempt $attempt failed"
         rm -f "$temp_file"
-        rm -rf "$temp_dir"
         sleep 2
     done
 

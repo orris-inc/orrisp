@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux]
+        goos: [linux, darwin]
         goarch: [amd64, arm64]
 
     steps:
@@ -24,11 +24,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-
-      - name: Install UPX
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y upx
 
       - name: Build
         env:
@@ -43,22 +38,11 @@ jobs:
             -o bin/${BINARY_NAME} \
             cmd/orrisp/main.go
 
-      - name: Compress with UPX
-        run: |
-          BINARY_NAME="orrisp-${{ matrix.goos }}-${{ matrix.goarch }}"
-          upx --best --lzma bin/${BINARY_NAME}
-
-      - name: Create archive
-        run: |
-          cd bin
-          BINARY_NAME="orrisp-${{ matrix.goos }}-${{ matrix.goarch }}"
-          tar -czvf ${BINARY_NAME}.tar.gz ${BINARY_NAME}
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: orrisp-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: bin/*.tar.gz
+          path: bin/orrisp-${{ matrix.goos }}-${{ matrix.goarch }}
 
   publish:
     needs: release
@@ -75,7 +59,7 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -type f -name "*.tar.gz" -exec cp {} release/ \;
+          find artifacts -type f -name "orrisp-*" -exec cp {} release/ \;
           ls -la release/
 
       - name: Generate checksums
