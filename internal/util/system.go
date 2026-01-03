@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"log/slog"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,6 +116,12 @@ type SystemMonitor struct {
 	// initialized indicates whether procfs was successfully initialized
 	initialized atomic.Bool
 
+	// unavailable indicates procfs is permanently unavailable (non-Linux systems)
+	unavailable atomic.Bool
+
+	// reinitAttempts tracks the number of reinitialization attempts
+	reinitAttempts atomic.Int32
+
 	// CPU state
 	lastCPUStat procfs.CPUStat
 	lastCPUTime time.Time
@@ -169,6 +176,15 @@ func NewSystemMonitor() *SystemMonitor {
 		lastNetStats: make(map[string]netIfaceStats),
 	}
 
+	// procfs is only available on Linux
+	if runtime.GOOS != "linux" {
+		m.unavailable.Store(true)
+		slog.Info("System stats unavailable on non-Linux platform",
+			slog.String("platform", runtime.GOOS),
+		)
+		return m
+	}
+
 	fs, err := procfs.NewFS("/proc")
 	if err != nil {
 		slog.Error("Failed to initialize procfs, system stats will be unavailable",
@@ -198,6 +214,11 @@ func NewSystemMonitor() *SystemMonitor {
 // GetStats returns current system statistics.
 func (m *SystemMonitor) GetStats() SystemStats {
 	var stats SystemStats
+
+	// Skip if permanently unavailable (non-Linux)
+	if m.unavailable.Load() {
+		return stats
+	}
 
 	// Try to reinitialize if not initialized (lazy initialization)
 	if !m.initialized.Load() {
@@ -292,8 +313,24 @@ func (m *SystemMonitor) GetStats() SystemStats {
 	return stats
 }
 
+// maxReinitAttempts is the maximum number of reinitialization attempts before giving up.
+const maxReinitAttempts = 3
+
 // tryReinitialize attempts to reinitialize procfs (useful if /proc becomes available later).
 func (m *SystemMonitor) tryReinitialize() {
+	// Check if we've exceeded max attempts
+	attempts := m.reinitAttempts.Add(1)
+	if attempts > maxReinitAttempts {
+		if attempts == maxReinitAttempts+1 {
+			// Only log once when we give up
+			m.unavailable.Store(true)
+			slog.Warn("Giving up on procfs initialization after max attempts",
+				slog.Int("attempts", maxReinitAttempts),
+			)
+		}
+		return
+	}
+
 	m.mu.Lock()
 
 	// Double-check under lock
@@ -304,8 +341,6 @@ func (m *SystemMonitor) tryReinitialize() {
 
 	fs, err := procfs.NewFS("/proc")
 	if err != nil {
-		// Still can't initialize, log periodically
-		slog.Debug("Procfs still unavailable", slog.Any("err", err))
 		m.mu.Unlock()
 		return
 	}
@@ -476,6 +511,9 @@ func (m *SystemMonitor) loadCPUInfo() {
 	m.cpuInfoOnce.Do(func() {
 		file, err := os.Open("/proc/cpuinfo")
 		if err != nil {
+			slog.Warn("Failed to open /proc/cpuinfo, CPU info will be unavailable",
+				slog.Any("err", err),
+			)
 			return
 		}
 		defer file.Close()
@@ -483,6 +521,9 @@ func (m *SystemMonitor) loadCPUInfo() {
 		var cores int
 		var modelName string
 		var cpuMHz float64
+
+		// ARM-specific fields
+		var cpuImplementer, cpuPart, cpuArchitecture string
 
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
@@ -508,6 +549,33 @@ func (m *SystemMonitor) loadCPUInfo() {
 						cpuMHz = v
 					}
 				}
+			// ARM-specific fields
+			case "CPU implementer":
+				cpuImplementer = value
+			case "CPU part":
+				cpuPart = value
+			case "CPU architecture":
+				cpuArchitecture = value
+			}
+		}
+
+		// If model name is empty (ARM architecture), try to construct one
+		if modelName == "" && cpuImplementer != "" {
+			modelName = m.getARMModelName(cpuImplementer, cpuPart, cpuArchitecture)
+			slog.Debug("Using ARM CPU model name",
+				slog.String("model_name", modelName),
+				slog.String("implementer", cpuImplementer),
+				slog.String("part", cpuPart),
+			)
+		}
+
+		// If CPU MHz is still 0, try to read from sysfs (common on ARM)
+		if cpuMHz == 0 {
+			cpuMHz = m.getCPUMHzFromSysfs()
+			if cpuMHz > 0 {
+				slog.Debug("Read CPU frequency from sysfs",
+					slog.Float64("cpu_mhz", cpuMHz),
+				)
 			}
 		}
 
@@ -517,7 +585,110 @@ func (m *SystemMonitor) loadCPUInfo() {
 		m.cpuCores = cores
 		m.cpuModelName = modelName
 		m.cpuMHz = cpuMHz
+
+		slog.Info("CPU info loaded",
+			slog.Int("cores", cores),
+			slog.String("model_name", modelName),
+			slog.Float64("cpu_mhz", cpuMHz),
+		)
 	})
+}
+
+// getARMModelName returns a human-readable model name for ARM CPUs.
+func (m *SystemMonitor) getARMModelName(implementer, part, architecture string) string {
+	// Common ARM implementers
+	implementerNames := map[string]string{
+		"0x41": "ARM",
+		"0x42": "Broadcom",
+		"0x43": "Cavium",
+		"0x44": "DEC",
+		"0x46": "Fujitsu",
+		"0x48": "HiSilicon",
+		"0x49": "Infineon",
+		"0x4d": "Motorola",
+		"0x4e": "NVIDIA",
+		"0x50": "APM",
+		"0x51": "Qualcomm",
+		"0x53": "Samsung",
+		"0x56": "Marvell",
+		"0x61": "Apple",
+		"0x66": "Faraday",
+		"0x69": "Intel",
+		"0xc0": "Ampere",
+	}
+
+	// Common ARM part numbers (for ARM implementer 0x41)
+	partNames := map[string]string{
+		"0xd03": "Cortex-A53",
+		"0xd04": "Cortex-A35",
+		"0xd05": "Cortex-A55",
+		"0xd07": "Cortex-A57",
+		"0xd08": "Cortex-A72",
+		"0xd09": "Cortex-A73",
+		"0xd0a": "Cortex-A75",
+		"0xd0b": "Cortex-A76",
+		"0xd0c": "Neoverse-N1",
+		"0xd0d": "Cortex-A77",
+		"0xd0e": "Cortex-A76AE",
+		"0xd40": "Neoverse-V1",
+		"0xd41": "Cortex-A78",
+		"0xd42": "Cortex-A78AE",
+		"0xd43": "Cortex-A65AE",
+		"0xd44": "Cortex-X1",
+		"0xd46": "Cortex-A510",
+		"0xd47": "Cortex-A710",
+		"0xd48": "Cortex-X2",
+		"0xd49": "Neoverse-N2",
+		"0xd4a": "Neoverse-E1",
+		"0xd4b": "Cortex-A78C",
+		"0xd4c": "Cortex-X1C",
+		"0xd4d": "Cortex-A715",
+		"0xd4e": "Cortex-X3",
+	}
+
+	implName := implementerNames[implementer]
+	if implName == "" {
+		implName = "ARM"
+	}
+
+	partName := partNames[part]
+	if partName == "" {
+		partName = "CPU"
+		if part != "" {
+			partName = "CPU " + part
+		}
+	}
+
+	result := implName + " " + partName
+	if architecture != "" {
+		result += " (ARMv" + architecture + ")"
+	}
+	return result
+}
+
+// getCPUMHzFromSysfs reads CPU frequency from sysfs (common on ARM).
+func (m *SystemMonitor) getCPUMHzFromSysfs() float64 {
+	// Try cpuinfo_max_freq first (in kHz)
+	paths := []string{
+		"/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq",
+		"/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq",
+		"/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq",
+	}
+
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		kHz, err := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
+		if err != nil {
+			continue
+		}
+		// Convert kHz to MHz
+		return kHz / 1000.0
+	}
+
+	return 0
 }
 
 // loadSystemInfo loads system information (cached, called once).
