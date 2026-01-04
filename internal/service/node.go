@@ -1084,11 +1084,11 @@ func (s *NodeService) hubStatusLoop(disconnectCh <-chan struct{}) {
 	}
 }
 
-// hubTrafficLoop sends periodic traffic reports while Hub is connected.
+// hubTrafficLoop sends periodic traffic reports via WebSocket while Hub is connected.
 func (s *NodeService) hubTrafficLoop(disconnectCh <-chan struct{}) {
 	defer s.wg.Done()
 
-	ticker := time.NewTicker(s.config.GetTrafficReportInterval())
+	ticker := time.NewTicker(s.config.GetHubTrafficInterval())
 	defer ticker.Stop()
 
 	for {
@@ -1098,10 +1098,45 @@ func (s *NodeService) hubTrafficLoop(disconnectCh <-chan struct{}) {
 		case <-disconnectCh:
 			return
 		case <-ticker.C:
-			if err := s.reportTraffic(); err != nil {
-				s.logger.Error("Failed to report traffic", slog.Any("err", err))
-			}
+			s.reportTrafficViaHub()
 		}
+	}
+}
+
+// reportTrafficViaHub sends traffic data through WebSocket Hub.
+func (s *NodeService) reportTrafficViaHub() {
+	s.mu.RLock()
+	hubClient := s.hubClient
+	s.mu.RUnlock()
+
+	if hubClient == nil {
+		return
+	}
+
+	// Get and reset traffic - restore on failure
+	trafficItems := s.statsClient.GetAndResetTraffic()
+	if len(trafficItems) == 0 {
+		return
+	}
+
+	// Send traffic via Hub event
+	if err := hubClient.SendEvent(api.EventTypeTraffic, "", trafficItems); err != nil {
+		s.logger.Warn("Failed to send traffic via hub, restoring data",
+			slog.Any("err", err),
+			slog.Int("count", len(trafficItems)),
+		)
+		// Restore traffic data on failure
+		s.statsClient.RestoreTraffic(trafficItems)
+		return
+	}
+
+	// Log traffic data
+	for _, item := range trafficItems {
+		s.logger.Debug("Traffic reported via hub",
+			slog.String("subscription_sid", item.SubscriptionSID),
+			slog.Int64("upload", item.Upload),
+			slog.Int64("download", item.Download),
+		)
 	}
 }
 
