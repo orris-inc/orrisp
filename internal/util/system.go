@@ -106,6 +106,9 @@ type SystemStats struct {
 
 	// Entropy pool
 	EntropyAvailable uint64
+
+	// System uptime
+	UptimeSeconds int64
 }
 
 // SystemMonitor monitors system resources using prometheus/procfs.
@@ -309,6 +312,9 @@ func (m *SystemMonitor) GetStats() SystemStats {
 
 	// Entropy
 	m.collectEntropyStats(&stats)
+
+	// Uptime
+	m.collectUptime(&stats)
 
 	return stats
 }
@@ -985,6 +991,23 @@ func (m *SystemMonitor) collectEntropyStats(stats *SystemStats) {
 	if data, err := m.fs.SysctlInts("kernel/random/entropy_avail"); err == nil && len(data) > 0 {
 		if data[0] >= 0 {
 			stats.EntropyAvailable = uint64(data[0])
+		}
+	}
+}
+
+// collectUptime collects system uptime from /proc/uptime.
+func (m *SystemMonitor) collectUptime(stats *SystemStats) {
+	data, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return
+	}
+
+	fields := strings.Fields(string(data))
+	if len(fields) >= 1 {
+		// First field is uptime in seconds (with decimal)
+		uptime, err := strconv.ParseFloat(fields[0], 64)
+		if err == nil {
+			stats.UptimeSeconds = int64(uptime)
 		}
 	}
 }

@@ -43,10 +43,11 @@ type NodeInstance struct {
 
 // SyncConfig synchronization configuration
 type SyncConfig struct {
-	UserInterval    int `yaml:"user_interval"`    // User sync interval (seconds)
-	TrafficInterval int `yaml:"traffic_interval"` // Traffic report interval (seconds)
-	StatusInterval  int `yaml:"status_interval"`  // Status report interval (seconds)
-	OnlineInterval  int `yaml:"online_interval"`  // Online users report interval (seconds)
+	UserInterval      int `yaml:"user_interval"`       // User sync interval (seconds)
+	TrafficInterval   int `yaml:"traffic_interval"`    // Traffic report interval (seconds)
+	StatusInterval    int `yaml:"status_interval"`     // Status report interval (seconds)
+	OnlineInterval    int `yaml:"online_interval"`     // Online users report interval (seconds)
+	IPRefreshInterval int `yaml:"ip_refresh_interval"` // Public IP refresh interval (seconds), default 60
 }
 
 // LogConfig log configuration
@@ -165,6 +166,14 @@ func (c *Config) GetOnlineReportInterval() time.Duration {
 		return 10 * time.Second
 	}
 	return time.Duration(c.Sync.OnlineInterval) * time.Second
+}
+
+// GetIPRefreshInterval gets public IP refresh interval
+func (c *Config) GetIPRefreshInterval() time.Duration {
+	if c.Sync.IPRefreshInterval <= 0 {
+		return 1 * time.Minute // Default: refresh every 1 minute
+	}
+	return time.Duration(c.Sync.IPRefreshInterval) * time.Second
 }
 
 // GetAPITimeout gets API request timeout

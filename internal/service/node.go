@@ -80,6 +80,7 @@ type NodeService struct {
 	// Cached public IP addresses
 	cachedPublicIPv4 string
 	cachedPublicIPv6 string
+	lastIPCheck      time.Time // Last time public IP was checked
 }
 
 // NewNodeService creates new node service for a specific node instance
@@ -486,8 +487,8 @@ func (s *NodeService) collectSystemStatus() *api.NodeStatus {
 		DiskWriteRate:  sysStats.DiskWriteRate,
 		DiskIOPS:       sysStats.DiskIOPS,
 
-		// Uptime
-		UptimeSeconds: int64(time.Since(s.startTime).Seconds()),
+		// Uptime (system uptime, not agent uptime)
+		UptimeSeconds: sysStats.UptimeSeconds,
 
 		// Load average
 		LoadAvg1:  sysStats.LoadAvg1,
@@ -566,14 +567,18 @@ func (s *NodeService) collectSystemStatus() *api.NodeStatus {
 }
 
 // getPublicIPs gets the server's public IPv4 and IPv6 addresses with caching.
+// It periodically refreshes the cached IPs based on the configured interval.
 func (s *NodeService) getPublicIPs() (ipv4, ipv6 string) {
+	refreshInterval := s.config.GetIPRefreshInterval()
+
 	s.mu.RLock()
 	cachedIPv4 := s.cachedPublicIPv4
 	cachedIPv6 := s.cachedPublicIPv6
+	lastCheck := s.lastIPCheck
 	s.mu.RUnlock()
 
-	// Return cached IPs if available (IPs rarely change during runtime)
-	if cachedIPv4 != "" || cachedIPv6 != "" {
+	// Return cached IPs if available and not expired
+	if (cachedIPv4 != "" || cachedIPv6 != "") && time.Since(lastCheck) < refreshInterval {
 		return cachedIPv4, cachedIPv6
 	}
 
@@ -584,15 +589,36 @@ func (s *NodeService) getPublicIPs() (ipv4, ipv6 string) {
 	ipv4, ipv6 = util.GetPublicIPs(ctx)
 
 	s.mu.Lock()
+	oldIPv4 := s.cachedPublicIPv4
+	oldIPv6 := s.cachedPublicIPv6
 	s.cachedPublicIPv4 = ipv4
 	s.cachedPublicIPv6 = ipv6
+	s.lastIPCheck = time.Now()
 	s.mu.Unlock()
 
-	if ipv4 != "" {
-		s.logger.Info("Public IPv4 detected", slog.String("ipv4", ipv4))
-	}
-	if ipv6 != "" {
-		s.logger.Info("Public IPv6 detected", slog.String("ipv6", ipv6))
+	// Log IP detection or changes
+	if oldIPv4 == "" && oldIPv6 == "" {
+		// First detection
+		if ipv4 != "" {
+			s.logger.Info("Public IPv4 detected", slog.String("ipv4", ipv4))
+		}
+		if ipv6 != "" {
+			s.logger.Info("Public IPv6 detected", slog.String("ipv6", ipv6))
+		}
+	} else {
+		// Check for changes
+		if ipv4 != oldIPv4 {
+			s.logger.Info("Public IPv4 changed",
+				slog.String("old", oldIPv4),
+				slog.String("new", ipv4),
+			)
+		}
+		if ipv6 != oldIPv6 {
+			s.logger.Info("Public IPv6 changed",
+				slog.String("old", oldIPv6),
+				slog.String("new", ipv6),
+			)
+		}
 	}
 
 	return ipv4, ipv6
