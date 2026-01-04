@@ -1019,13 +1019,20 @@ func (s *NodeService) hubConnectionLoop() {
 // connectHub creates and connects the Hub client.
 // It respects context cancellation so shutdown can interrupt connection attempts.
 func (s *NodeService) connectHub() error {
+	// Read config values under lock to avoid race with handleAPIURLChanged
+	s.mu.RLock()
+	baseURL := s.config.API.BaseURL
+	pingInterval := s.config.GetHubPingInterval()
+	pongWait := s.config.GetHubPongWait()
+	s.mu.RUnlock()
+
 	hubClient, err := api.NewHubClient(
-		s.config.API.BaseURL,
+		baseURL,
 		s.nodeInstance.Token,
 		s.nodeInstance.SID,
 		s, // NodeService implements HubHandler
-		api.WithPingInterval(s.config.GetHubPingInterval()),
-		api.WithPongWait(s.config.GetHubPongWait()),
+		api.WithPingInterval(pingInterval),
+		api.WithPongWait(pongWait),
 	)
 	if err != nil {
 		return fmt.Errorf("create hub client: %w", err)
@@ -1253,8 +1260,82 @@ func (s *NodeService) OnCommand(cmd *api.CommandData) {
 		s.logger.Info("Executing update command")
 		go s.handleUpdate(cmd)
 
+	case api.CmdActionAPIURLChanged, api.CmdActionConfigRelocate:
+		s.logger.Info("Executing API URL change command")
+		go s.handleAPIURLChanged(cmd)
+
 	default:
 		s.logger.Warn("Unknown command action", slog.String("action", cmd.Action))
+	}
+}
+
+// handleAPIURLChanged handles API URL change command from the server.
+// It updates the local API URL configuration, saves to config file, and triggers Hub reconnection.
+func (s *NodeService) handleAPIURLChanged(cmd *api.CommandData) {
+	payload := api.ParseAPIURLChangedPayload(cmd.Payload)
+	if payload == nil {
+		s.logger.Error("Failed to parse API URL changed payload")
+		return
+	}
+
+	if payload.NewURL == "" {
+		s.logger.Error("API URL changed payload has empty new_url")
+		return
+	}
+
+	s.logger.Info("API URL changed, updating configuration",
+		slog.String("new_url", payload.NewURL),
+		slog.String("reason", payload.Reason),
+	)
+
+	// Create new API client with new URL
+	newAPIClient, err := api.NewClient(
+		payload.NewURL,
+		s.nodeInstance.Token,
+		s.nodeInstance.SID,
+		api.WithTimeout(s.config.GetAPITimeout()),
+	)
+	if err != nil {
+		s.logger.Error("Failed to create new API client", slog.Any("err", err))
+		return
+	}
+
+	// Update config, API client, and get hub client under lock
+	s.mu.Lock()
+	oldURL := s.config.API.BaseURL
+	s.config.API.BaseURL = payload.NewURL
+	s.apiClient = newAPIClient
+	hubClient := s.hubClient
+
+	// Save config while holding lock to ensure consistency
+	var saveErr error
+	if s.config.Path != "" {
+		saveErr = s.config.Save()
+	}
+	s.mu.Unlock()
+
+	s.logger.Info("API URL and client updated",
+		slog.String("old_url", oldURL),
+		slog.String("new_url", payload.NewURL),
+	)
+
+	// Log save result
+	if s.config.Path == "" {
+		s.logger.Warn("Config file not saved: no file path (loaded from CLI flags)")
+	} else if saveErr != nil {
+		s.logger.Warn("Failed to save config file", slog.Any("err", saveErr))
+	} else {
+		s.logger.Info("Config file updated with new API URL",
+			slog.String("path", s.config.Path),
+		)
+	}
+
+	// Close current Hub connection to trigger reconnect with new URL
+	if hubClient != nil {
+		s.logger.Info("Closing Hub connection to reconnect with new URL")
+		if err := hubClient.Close(); err != nil {
+			s.logger.Warn("Failed to close hub connection", slog.Any("err", err))
+		}
 	}
 }
 

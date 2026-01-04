@@ -15,6 +15,9 @@ type Config struct {
 	Nodes []NodeInstance `yaml:"nodes"` // Node instances configuration
 	Sync  SyncConfig     `yaml:"sync"`
 	Log   LogConfig      `yaml:"log"`
+
+	// Path is the config file path (not serialized, set at load time)
+	Path string `yaml:"-"`
 }
 
 // APIConfig API related configuration
@@ -103,7 +106,29 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
+	// Store the config file path for later use (e.g., saving updates)
+	config.Path = path
+
 	return config, nil
+}
+
+// Save saves configuration to its original file path.
+// Returns error if Path is empty (config was loaded from CLI flags).
+func (c *Config) Save() error {
+	if c.Path == "" {
+		return fmt.Errorf("cannot save config: no file path (loaded from CLI flags)")
+	}
+
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(c.Path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
 }
 
 // Validate validates configuration

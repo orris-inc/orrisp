@@ -60,6 +60,7 @@ func main() {
 	// Get node instances
 	instances := cfg.GetNodeInstances()
 	logger.Info("configuration loaded",
+		slog.String("config_path", cfg.Path),
 		slog.String("api_base_url", cfg.API.BaseURL),
 		slog.Int("node_count", len(instances)),
 	)
