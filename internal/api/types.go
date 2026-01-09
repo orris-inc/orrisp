@@ -9,45 +9,92 @@ package api
 // Compatible with sing-box inbound configuration.
 type NodeConfig struct {
 	NodeSID           string       `json:"node_id"`                     // Node SID (Stripe-style: node_xxx)
-	Protocol          string       `json:"protocol"`                    // shadowsocks or trojan
+	Protocol          string       `json:"protocol"`                    // Protocol type: shadowsocks, trojan, vless, vmess, hysteria2, tuic
 	ServerHost        string       `json:"server_host"`                 // Server hostname or IP address
 	ServerPort        int          `json:"server_port"`                 // Server port number
 	EncryptionMethod  string       `json:"encryption_method,omitempty"` // Encryption method for Shadowsocks
 	ServerKey         string       `json:"server_key,omitempty"`        // Server password for SS
-	TransportProtocol string       `json:"transport_protocol"`          // Transport protocol (tcp, ws, grpc)
-	Host              string       `json:"host,omitempty"`              // WebSocket host header
-	Path              string       `json:"path,omitempty"`              // WebSocket path
+	TransportProtocol string       `json:"transport_protocol"`          // Transport protocol (tcp, ws, grpc, h2, http, quic)
+	Host              string       `json:"host,omitempty"`              // WebSocket/HTTP host header
+	Path              string       `json:"path,omitempty"`              // WebSocket/HTTP path
 	ServiceName       string       `json:"service_name,omitempty"`      // gRPC service name
 	SNI               string       `json:"sni,omitempty"`               // TLS Server Name Indication
 	AllowInsecure     bool         `json:"allow_insecure"`              // Allow insecure TLS connection
-	EnableVless       bool         `json:"enable_vless"`
-	EnableXTLS        bool         `json:"enable_xtls"`
+	EnableVless       bool         `json:"enable_vless"`                // Deprecated: use Protocol=vless
+	EnableXTLS        bool         `json:"enable_xtls"`                 // Deprecated: use VLESSFlow
 	SpeedLimit        uint64       `json:"speed_limit"`
 	DeviceLimit       int          `json:"device_limit"`
 	RuleListPath      string       `json:"rule_list_path,omitempty"` // Deprecated: use Route instead
 	Route             *RouteConfig `json:"route,omitempty"`          // Routing configuration for traffic splitting
 	Outbounds         []Outbound   `json:"outbounds,omitempty"`      // Outbound configs for nodes referenced in route rules
+
+	// VLESS specific fields
+	VLESSFlow             string `json:"vless_flow,omitempty"`               // VLESS flow control (xtls-rprx-vision)
+	VLESSSecurity         string `json:"vless_security,omitempty"`           // VLESS security type (none, tls, reality)
+	VLESSFingerprint      string `json:"vless_fingerprint,omitempty"`        // TLS fingerprint for VLESS
+	VLESSRealityPublicKey string `json:"vless_reality_public_key,omitempty"` // Reality public key
+	VLESSRealityShortID   string `json:"vless_reality_short_id,omitempty"`   // Reality short ID
+	VLESSRealitySpiderX   string `json:"vless_reality_spider_x,omitempty"`   // Reality spider X parameter
+
+	// VMess specific fields
+	VMessAlterID  int    `json:"vmess_alter_id,omitempty"`  // VMess alter ID (usually 0)
+	VMessSecurity string `json:"vmess_security,omitempty"`  // VMess security (auto, aes-128-gcm, chacha20-poly1305, none, zero)
+	VMessTLS      bool   `json:"vmess_tls,omitempty"`       // VMess TLS enabled
+
+	// Hysteria2 specific fields
+	Hysteria2CongestionControl string `json:"hysteria2_congestion_control,omitempty"` // Congestion control (cubic, bbr, new_reno)
+	Hysteria2Obfs              string `json:"hysteria2_obfs,omitempty"`               // Obfuscation type (salamander)
+	Hysteria2ObfsPassword      string `json:"hysteria2_obfs_password,omitempty"`      // Obfuscation password
+	Hysteria2UpMbps            *int   `json:"hysteria2_up_mbps,omitempty"`            // Upstream bandwidth limit in Mbps
+	Hysteria2DownMbps          *int   `json:"hysteria2_down_mbps,omitempty"`          // Downstream bandwidth limit in Mbps
+	Hysteria2Fingerprint       string `json:"hysteria2_fingerprint,omitempty"`        // TLS fingerprint for Hysteria2
+
+	// TUIC specific fields
+	TUICCongestionControl string `json:"tuic_congestion_control,omitempty"` // Congestion control (cubic, bbr, new_reno)
+	TUICUDPRelayMode      string `json:"tuic_udp_relay_mode,omitempty"`     // UDP relay mode (native, quic)
+	TUICAlpn              string `json:"tuic_alpn,omitempty"`               // ALPN protocols
+	TUICDisableSNI        bool   `json:"tuic_disable_sni,omitempty"`        // Disable SNI
 }
 
 // Outbound represents a sing-box outbound configuration.
 // Used when route rules reference other nodes as outbounds.
 type Outbound struct {
-	Type   string `json:"type"`        // Protocol type: shadowsocks, trojan, direct, block
+	Type   string `json:"type"`        // Protocol type: shadowsocks, trojan, vless, vmess, hysteria2, tuic, direct, block
 	Tag    string `json:"tag"`         // Unique identifier for the outbound (node SID)
 	Server string `json:"server"`      // Server hostname or IP address
 	Port   int    `json:"server_port"` // Server port number
 
 	// Shadowsocks specific fields
 	Method     string `json:"method,omitempty"`      // Encryption method for SS
-	Password   string `json:"password,omitempty"`    // Password for SS/Trojan
+	Password   string `json:"password,omitempty"`    // Password for SS/Trojan/Hysteria2/TUIC
 	Plugin     string `json:"plugin,omitempty"`      // SIP003 plugin name
 	PluginOpts string `json:"plugin_opts,omitempty"` // Plugin options string
 
-	// TLS fields (for Trojan)
+	// UUID field (for VLESS/VMess/TUIC)
+	UUID string `json:"uuid,omitempty"` // User UUID for VLESS/VMess/TUIC
+
+	// TLS fields (for Trojan/VLESS/VMess)
 	TLS *OutboundTLS `json:"tls,omitempty"` // TLS configuration
 
-	// Transport fields (for Trojan ws/grpc)
+	// Transport fields (for Trojan/VLESS/VMess ws/grpc/h2)
 	Transport *OutboundTransport `json:"transport,omitempty"` // Transport configuration
+
+	// VLESS specific fields
+	VLESSFlow string `json:"flow,omitempty"` // VLESS flow control (xtls-rprx-vision)
+
+	// VMess specific fields
+	VMessAlterID  int    `json:"alter_id,omitempty"` // VMess alter ID
+	VMessSecurity string `json:"security,omitempty"` // VMess encryption method
+
+	// Hysteria2 specific fields
+	Hysteria2Obfs         string `json:"obfs,omitempty"`          // Obfuscation type
+	Hysteria2ObfsPassword string `json:"obfs_password,omitempty"` // Obfuscation password
+	Hysteria2UpMbps       *int   `json:"up_mbps,omitempty"`       // Upstream bandwidth limit
+	Hysteria2DownMbps     *int   `json:"down_mbps,omitempty"`     // Downstream bandwidth limit
+
+	// TUIC specific fields
+	TUICCongestionControl string `json:"congestion_control,omitempty"` // Congestion control algorithm
+	TUICUDPRelayMode      string `json:"udp_relay_mode,omitempty"`     // UDP relay mode
 }
 
 // OutboundTLS represents TLS configuration for outbound.
@@ -57,6 +104,16 @@ type OutboundTLS struct {
 	Insecure   bool     `json:"insecure,omitempty"`    // Allow insecure TLS
 	DisableSNI bool     `json:"disable_sni,omitempty"` // Disable SNI
 	ALPN       []string `json:"alpn,omitempty"`        // ALPN protocols
+
+	// Reality specific fields (for VLESS)
+	Reality *OutboundReality `json:"reality,omitempty"` // Reality configuration
+}
+
+// OutboundReality represents Reality configuration for outbound TLS.
+type OutboundReality struct {
+	Enabled   bool   `json:"enabled"`              // Enable Reality
+	PublicKey string `json:"public_key,omitempty"` // Reality public key
+	ShortID   string `json:"short_id,omitempty"`   // Reality short ID
 }
 
 // OutboundTransport represents transport configuration for outbound.
@@ -114,6 +171,26 @@ func (c *NodeConfig) IsTrojan() bool {
 // IsShadowsocks returns true if the node is configured for Shadowsocks protocol.
 func (c *NodeConfig) IsShadowsocks() bool {
 	return c.Protocol == "shadowsocks"
+}
+
+// IsVLESS returns true if the node is configured for VLESS protocol.
+func (c *NodeConfig) IsVLESS() bool {
+	return c.Protocol == "vless"
+}
+
+// IsVMess returns true if the node is configured for VMess protocol.
+func (c *NodeConfig) IsVMess() bool {
+	return c.Protocol == "vmess"
+}
+
+// IsHysteria2 returns true if the node is configured for Hysteria2 protocol.
+func (c *NodeConfig) IsHysteria2() bool {
+	return c.Protocol == "hysteria2"
+}
+
+// IsTUIC returns true if the node is configured for TUIC protocol.
+func (c *NodeConfig) IsTUIC() bool {
+	return c.Protocol == "tuic"
 }
 
 // Subscription represents an individual subscription authorized for the node.

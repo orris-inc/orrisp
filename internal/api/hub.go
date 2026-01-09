@@ -27,8 +27,9 @@ import (
 //	  - event:     Node events (connected, disconnected, error, config_change)
 //
 //	Server -> Agent:
-//	  - command:     Server commands (reload_config, restart, stop, update)
-//	  - config_sync: Configuration sync (full or incremental)
+//	  - command:           Server commands (reload_config, restart, stop, update)
+//	  - config_sync:       Configuration sync (full or incremental)
+//	  - subscription_sync: Subscription changes (added, updated, removed)
 const (
 	// Agent -> Server message types.
 	MsgTypeStatus    = "status"    // Send node status (NodeStatus)
@@ -36,8 +37,9 @@ const (
 	MsgTypeEvent     = "event"     // Send node events (EventData)
 
 	// Server -> Agent message types.
-	MsgTypeCommand    = "command"     // Receive server commands (CommandData)
-	MsgTypeConfigSync = "config_sync" // Receive config sync (ConfigSyncData)
+	MsgTypeCommand          = "command"           // Receive server commands (CommandData)
+	MsgTypeConfigSync       = "config_sync"       // Receive config sync (ConfigSyncData)
+	MsgTypeSubscriptionSync = "subscription_sync" // Receive subscription changes (SubscriptionSyncData)
 )
 
 // Command action constants define available server commands.
@@ -115,15 +117,31 @@ type ConfigSyncData struct {
 	Timestamp int64       `json:"timestamp"`        // Unix timestamp
 }
 
+// Subscription change type constants define the type of subscription change.
+const (
+	SubscriptionChangeAdded   = "added"   // New subscription added
+	SubscriptionChangeUpdated = "updated" // Subscription updated (status, expiry, etc.)
+	SubscriptionChangeRemoved = "removed" // Subscription removed or expired
+)
+
+// SubscriptionSyncData represents subscription sync data sent from server to node agent.
+// Used with MsgTypeSubscriptionSync message type.
+// The handler receives this via HubHandler.OnSubscriptionSync().
+type SubscriptionSyncData struct {
+	ChangeType    string         `json:"change_type"`             // Change type (added, updated, removed)
+	Subscriptions []Subscription `json:"subscriptions,omitempty"` // Affected subscriptions
+	Timestamp     int64          `json:"timestamp"`               // Unix timestamp
+}
+
 // ConfigData represents the node configuration for hub sync.
 type ConfigData struct {
 	NodeSID           string       `json:"node_id"`
-	Protocol          string       `json:"protocol"`
+	Protocol          string       `json:"protocol"`                    // Protocol type: shadowsocks, trojan, vless, vmess, hysteria2, tuic
 	ServerHost        string       `json:"server_host"`
 	ServerPort        int          `json:"server_port"`
 	EncryptionMethod  string       `json:"encryption_method,omitempty"`
 	ServerKey         string       `json:"server_key,omitempty"`
-	TransportProtocol string       `json:"transport_protocol"`
+	TransportProtocol string       `json:"transport_protocol"`          // Transport protocol (tcp, ws, grpc, h2, http, quic)
 	Host              string       `json:"host,omitempty"`
 	Path              string       `json:"path,omitempty"`
 	ServiceName       string       `json:"service_name,omitempty"`
@@ -131,6 +149,33 @@ type ConfigData struct {
 	AllowInsecure     bool         `json:"allow_insecure"`
 	Route             *RouteConfig `json:"route,omitempty"`     // Routing configuration for traffic splitting
 	Outbounds         []Outbound   `json:"outbounds,omitempty"` // Outbound configs for nodes referenced in route rules
+
+	// VLESS specific fields
+	VLESSFlow             string `json:"vless_flow,omitempty"`
+	VLESSSecurity         string `json:"vless_security,omitempty"`
+	VLESSFingerprint      string `json:"vless_fingerprint,omitempty"`
+	VLESSRealityPublicKey string `json:"vless_reality_public_key,omitempty"`
+	VLESSRealityShortID   string `json:"vless_reality_short_id,omitempty"`
+	VLESSRealitySpiderX   string `json:"vless_reality_spider_x,omitempty"`
+
+	// VMess specific fields
+	VMessAlterID  int    `json:"vmess_alter_id,omitempty"`
+	VMessSecurity string `json:"vmess_security,omitempty"`
+	VMessTLS      bool   `json:"vmess_tls,omitempty"`
+
+	// Hysteria2 specific fields
+	Hysteria2CongestionControl string `json:"hysteria2_congestion_control,omitempty"`
+	Hysteria2Obfs              string `json:"hysteria2_obfs,omitempty"`
+	Hysteria2ObfsPassword      string `json:"hysteria2_obfs_password,omitempty"`
+	Hysteria2UpMbps            *int   `json:"hysteria2_up_mbps,omitempty"`
+	Hysteria2DownMbps          *int   `json:"hysteria2_down_mbps,omitempty"`
+	Hysteria2Fingerprint       string `json:"hysteria2_fingerprint,omitempty"`
+
+	// TUIC specific fields
+	TUICCongestionControl string `json:"tuic_congestion_control,omitempty"`
+	TUICUDPRelayMode      string `json:"tuic_udp_relay_mode,omitempty"`
+	TUICAlpn              string `json:"tuic_alpn,omitempty"`
+	TUICDisableSNI        bool   `json:"tuic_disable_sni,omitempty"`
 }
 
 // Hub errors.
@@ -146,6 +191,9 @@ type HubHandler interface {
 	OnCommand(cmd *CommandData)
 	// OnConfigSync is called when a config sync message is received.
 	OnConfigSync(sync *ConfigSyncData)
+	// OnSubscriptionSync is called when a subscription sync message is received.
+	// This notifies the agent about subscription changes (added, updated, removed).
+	OnSubscriptionSync(sync *SubscriptionSyncData)
 	// OnError is called when an error occurs.
 	OnError(err error)
 	// OnDisconnect is called when the connection is closed.
@@ -438,6 +486,8 @@ func (h *HubClient) handleMessage(msg *HubMessage) {
 		h.handleCommand(msg.Data)
 	case MsgTypeConfigSync:
 		h.handleConfigSync(msg.Data)
+	case MsgTypeSubscriptionSync:
+		h.handleSubscriptionSync(msg.Data)
 	}
 }
 
@@ -471,6 +521,22 @@ func (h *HubClient) handleConfigSync(data any) {
 	}
 
 	h.handler.OnConfigSync(&sync)
+}
+
+func (h *HubClient) handleSubscriptionSync(data any) {
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		h.handler.OnError(fmt.Errorf("marshal subscription sync data: %w", err))
+		return
+	}
+
+	var sync SubscriptionSyncData
+	if err := json.Unmarshal(dataBytes, &sync); err != nil {
+		h.handler.OnError(fmt.Errorf("unmarshal subscription sync: %w", err))
+		return
+	}
+
+	h.handler.OnSubscriptionSync(&sync)
 }
 
 // ParseAPIURLChangedPayload parses the API URL changed payload from CommandData.
