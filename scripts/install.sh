@@ -349,6 +349,46 @@ install() {
     fi
 }
 
+# Kill process by name with timeout
+kill_process() {
+    local pids
+    pids=$(pgrep -x "${BINARY_NAME}" 2>/dev/null || true)
+
+    if [ -z "$pids" ]; then
+        return 0
+    fi
+
+    print_info "Sending SIGTERM to ${BINARY_NAME} processes..."
+    pkill -x "${BINARY_NAME}" 2>/dev/null || true
+
+    # Wait for graceful shutdown (max 10 seconds)
+    local count=0
+    while [ $count -lt 10 ]; do
+        if ! pgrep -x "${BINARY_NAME}" >/dev/null 2>&1; then
+            print_info "Process terminated gracefully"
+            return 0
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+
+    # Force kill if still running
+    if pgrep -x "${BINARY_NAME}" >/dev/null 2>&1; then
+        print_warn "Process did not terminate gracefully, sending SIGKILL..."
+        pkill -9 -x "${BINARY_NAME}" 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Final check
+    if pgrep -x "${BINARY_NAME}" >/dev/null 2>&1; then
+        print_error "Failed to kill ${BINARY_NAME} process"
+        return 1
+    fi
+
+    print_info "Process terminated"
+    return 0
+}
+
 # Uninstall function
 uninstall() {
     print_info "Starting Orrisp Node Agent uninstallation..."
@@ -357,12 +397,16 @@ uninstall() {
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         print_info "Stopping service..."
         systemctl stop "${SERVICE_NAME}" || true
+        sleep 2
     fi
 
     if systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null; then
         print_info "Disabling service..."
         systemctl disable "${SERVICE_NAME}" || true
     fi
+
+    # Ensure process is killed (handles non-systemd starts)
+    kill_process
 
     # Remove service file
     if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
@@ -388,6 +432,17 @@ uninstall() {
     if [ -d "$CERT_DIR" ]; then
         print_info "Removing certificate directory..."
         rm -rf "$CERT_DIR"
+    fi
+
+    # Remove parent directory if empty
+    if [ -d "/var/lib/orrisp" ]; then
+        rmdir "/var/lib/orrisp" 2>/dev/null || true
+    fi
+
+    # Remove temp certificate directory
+    if [ -d "/tmp/orrisp" ]; then
+        print_info "Removing temp directory..."
+        rm -rf "/tmp/orrisp"
     fi
 
     print_info "Uninstallation completed successfully!"
