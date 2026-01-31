@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestGenerateSelfSigned_Ed25519(t *testing.T) {
+func TestGenerateSelfSigned_ECDSA(t *testing.T) {
 	// Create temp directory
 	dir := t.TempDir()
 
@@ -42,9 +42,9 @@ func TestGenerateSelfSigned_Ed25519(t *testing.T) {
 		t.Fatalf("Failed to parse certificate: %v", err)
 	}
 
-	// Verify it's Ed25519
-	if certificate.PublicKeyAlgorithm != x509.Ed25519 {
-		t.Errorf("Expected Ed25519 public key algorithm, got %v", certificate.PublicKeyAlgorithm)
+	// Verify it's ECDSA
+	if certificate.PublicKeyAlgorithm != x509.ECDSA {
+		t.Errorf("Expected ECDSA public key algorithm, got %v", certificate.PublicKeyAlgorithm)
 	}
 
 	// Verify common name

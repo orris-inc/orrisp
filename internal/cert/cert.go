@@ -2,7 +2,8 @@
 package cert
 
 import (
-	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -28,8 +29,8 @@ func GenerateSelfSigned(dir string, sni string) (*SelfSignedCert, error) {
 		sni = "localhost"
 	}
 
-	// Generate Ed25519 private key (faster and more secure than ECDSA P-256)
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	// Generate ECDSA P-256 private key (widely supported, good performance)
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate private key: %w", err)
 	}
@@ -61,7 +62,7 @@ func GenerateSelfSigned(dir string, sni string) (*SelfSignedCert, error) {
 	}
 
 	// Create certificate
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, publicKey, privateKey)
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create certificate: %w", err)
 	}
@@ -91,7 +92,7 @@ func GenerateSelfSigned(dir string, sni string) (*SelfSignedCert, error) {
 	}
 	defer keyFile.Close()
 
-	// Marshal Ed25519 private key to PKCS#8 format
+	// Marshal ECDSA private key to PKCS#8 format
 	keyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal private key: %w", err)

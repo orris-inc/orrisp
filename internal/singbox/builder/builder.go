@@ -116,16 +116,13 @@ func BuildConfig(nodeConfig *api.NodeConfig, subscriptions []api.Subscription, c
 	return options, nil
 }
 
-// buildTLSOptions builds TLS options with performance optimizations
+// buildTLSOptions builds TLS options with compatibility settings.
+// For VLESS with Reality security, it configures Reality-specific options.
 func buildTLSOptions(nodeConfig *api.NodeConfig) *option.InboundTLSOptions {
 	tlsOptions := &option.InboundTLSOptions{
 		Enabled:    true,
-		MinVersion: "1.3", // Force TLS 1.3 for better performance
-		MaxVersion: "1.3", // Only use TLS 1.3
-		ALPN: []string{
-			"h2",       // HTTP/2 for better multiplexing
-			"http/1.1", // HTTP/1.1 fallback
-		},
+		MinVersion: "1.2", // Allow TLS 1.2 for compatibility
+		MaxVersion: "1.3", // Prefer TLS 1.3
 	}
 	if nodeConfig.SNI != "" {
 		tlsOptions.ServerName = nodeConfig.SNI
@@ -133,5 +130,21 @@ func buildTLSOptions(nodeConfig *api.NodeConfig) *option.InboundTLSOptions {
 	if nodeConfig.AllowInsecure {
 		tlsOptions.Insecure = true
 	}
+
+	// Configure Reality for VLESS if security type is "reality"
+	if nodeConfig.VLESSSecurity == "reality" && nodeConfig.VLESSRealityPrivateKey != "" {
+		tlsOptions.Reality = &option.InboundRealityOptions{
+			Enabled:    true,
+			PrivateKey: nodeConfig.VLESSRealityPrivateKey,
+			ShortID:    []string{nodeConfig.VLESSRealityShortID},
+			Handshake: option.InboundRealityHandshakeOptions{
+				ServerOptions: option.ServerOptions{
+					Server:     nodeConfig.SNI, // Use SNI as handshake server for TLS camouflage
+					ServerPort: 443,
+				},
+			},
+		}
+	}
+
 	return tlsOptions
 }

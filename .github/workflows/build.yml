@@ -32,7 +32,8 @@ jobs:
           if [ "$GOOS" = "windows" ]; then
             EXT=".exe"
           fi
-          go build -ldflags "-s -w -X main.version=dev -X main.buildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
+          go build -tags "with_utls,with_quic" \
+            -ldflags "-s -w -X main.version=dev -X main.buildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
             -o bin/orrisp-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             cmd/orrisp/main.go
 
@@ -54,7 +55,7 @@ jobs:
           go-version: "1.24"
 
       - name: Run tests
-        run: go test -v ./...
+        run: go test -tags "with_utls,with_quic" -v ./...
 
       - name: Run go vet
-        run: go vet ./...
+        run: go vet -tags "with_utls,with_quic" ./...

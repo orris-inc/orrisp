@@ -34,7 +34,8 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           BINARY_NAME="orrisp-${GOOS}-${GOARCH}"
 
-          go build -ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
+          go build -tags "with_utls,with_quic" \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=$(date -u '+%Y-%m-%d_%H:%M:%S')" \
             -o bin/${BINARY_NAME} \
             cmd/orrisp/main.go
 

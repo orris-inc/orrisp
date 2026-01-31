@@ -94,12 +94,14 @@ func (s *Service) generateSingboxOptions() (*option.Options, error) {
 		slog.Bool("has_clash_api", hasClashAPI),
 	)
 
-	// Configure TLS certificate for protocols that require TLS
-	requiresTLS := nodeConfig.Protocol == "trojan" ||
+	// Configure TLS certificate for protocols that require TLS (except Reality which uses TLS camouflage)
+	// Reality mode doesn't need certificates - it mimics the TLS handshake of real websites
+	isReality := nodeConfig.Protocol == "vless" && nodeConfig.VLESSSecurity == "reality"
+	requiresTLS := (nodeConfig.Protocol == "trojan" ||
 		nodeConfig.Protocol == "vless" ||
 		(nodeConfig.Protocol == "vmess" && nodeConfig.VMessTLS) ||
 		nodeConfig.Protocol == "hysteria2" ||
-		nodeConfig.Protocol == "tuic"
+		nodeConfig.Protocol == "tuic") && !isReality
 
 	if requiresTLS {
 		// Ensure certificate exists (generate self-signed if not configured)
@@ -119,7 +121,8 @@ func (s *Service) generateSingboxOptions() (*option.Options, error) {
 				}
 			case "vless":
 				if vlessOpts, ok := options.Inbounds[i].Options.(*option.VLESSInboundOptions); ok {
-					if vlessOpts.TLS != nil {
+					if vlessOpts.TLS != nil && vlessOpts.TLS.Reality == nil {
+						// Only set certificate for non-Reality VLESS
 						vlessOpts.TLS.CertificatePath = certPath
 						vlessOpts.TLS.KeyPath = keyPath
 					}

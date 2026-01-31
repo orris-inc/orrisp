@@ -147,6 +147,7 @@ func buildVlessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 		users = append(users, option.VLESSUser{
 			Name: sub.Name,
 			UUID: sub.Password, // For VLESS, password field contains UUID
+			Flow: nodeConfig.VLESSFlow,
 		})
 	}
 

@@ -166,6 +166,11 @@ func (s *Service) OnConfigSync(sync *api.ConfigSyncData) {
 	s.logger.Info("Config updated from hub sync",
 		slog.String("node_sid", sync.Config.NodeSID),
 		slog.String("protocol", sync.Config.Protocol),
+		slog.String("security", sync.Config.Security),
+		slog.String("flow", sync.Config.Flow),
+		slog.String("public_key", sync.Config.PublicKey),
+		slog.String("short_id", sync.Config.ShortID),
+		slog.String("sni", sync.Config.SNI),
 	)
 
 	// Reload sing-box with new config
@@ -198,32 +203,33 @@ func (s *Service) convertHubConfigToNodeConfig(hubConfig *api.ConfigData) *api.N
 		Route:             hubConfig.Route,
 		Outbounds:         hubConfig.Outbounds,
 
-		// VLESS specific fields
-		VLESSFlow:             hubConfig.VLESSFlow,
-		VLESSSecurity:         hubConfig.VLESSSecurity,
-		VLESSFingerprint:      hubConfig.VLESSFingerprint,
-		VLESSRealityPublicKey: hubConfig.VLESSRealityPublicKey,
-		VLESSRealityShortID:   hubConfig.VLESSRealityShortID,
-		VLESSRealitySpiderX:   hubConfig.VLESSRealitySpiderX,
+		// VLESS specific fields (map from simplified ConfigData field names)
+		VLESSFlow:              hubConfig.Flow,
+		VLESSSecurity:          hubConfig.Security,
+		VLESSFingerprint:       hubConfig.Fingerprint,
+		VLESSRealityPrivateKey: hubConfig.PrivateKey,
+		VLESSRealityPublicKey:  hubConfig.PublicKey,
+		VLESSRealityShortID:    hubConfig.ShortID,
+		VLESSRealitySpiderX:    hubConfig.SpiderX,
 
 		// VMess specific fields
-		VMessAlterID:  hubConfig.VMessAlterID,
-		VMessSecurity: hubConfig.VMessSecurity,
-		VMessTLS:      hubConfig.VMessTLS,
+		VMessAlterID:  hubConfig.AlterID,
+		VMessSecurity: hubConfig.Security,
+		VMessTLS:      hubConfig.TLS,
 
 		// Hysteria2 specific fields
-		Hysteria2CongestionControl: hubConfig.Hysteria2CongestionControl,
-		Hysteria2Obfs:              hubConfig.Hysteria2Obfs,
-		Hysteria2ObfsPassword:      hubConfig.Hysteria2ObfsPassword,
-		Hysteria2UpMbps:            hubConfig.Hysteria2UpMbps,
-		Hysteria2DownMbps:          hubConfig.Hysteria2DownMbps,
-		Hysteria2Fingerprint:       hubConfig.Hysteria2Fingerprint,
+		Hysteria2CongestionControl: hubConfig.CongestionControl,
+		Hysteria2Obfs:              hubConfig.Obfs,
+		Hysteria2ObfsPassword:      hubConfig.ObfsPassword,
+		Hysteria2UpMbps:            hubConfig.UpMbps,
+		Hysteria2DownMbps:          hubConfig.DownMbps,
+		Hysteria2Fingerprint:       hubConfig.Fingerprint,
 
 		// TUIC specific fields
-		TUICCongestionControl: hubConfig.TUICCongestionControl,
-		TUICUDPRelayMode:      hubConfig.TUICUDPRelayMode,
-		TUICAlpn:              hubConfig.TUICAlpn,
-		TUICDisableSNI:        hubConfig.TUICDisableSNI,
+		TUICCongestionControl: hubConfig.CongestionControl,
+		TUICUDPRelayMode:      hubConfig.UDPRelayMode,
+		TUICAlpn:              hubConfig.ALPN,
+		TUICDisableSNI:        hubConfig.DisableSNI,
 	}
 }
 
