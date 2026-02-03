@@ -14,10 +14,12 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/orrisp"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 CERT_DIR="/var/lib/orrisp/certs"
+LOG_FILE="/var/log/orrisp.log"
 GITHUB_REPO="orris-inc/orrisp"
 DOWNLOAD_TIMEOUT=120
 CONNECT_TIMEOUT=10
 MAX_RETRIES=3
+INIT_SYSTEM=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -74,6 +76,19 @@ detect_platform() {
     esac
 
     print_info "Detected platform: $PLATFORM"
+}
+
+# Detect init system (systemd or openrc)
+detect_init_system() {
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        INIT_SYSTEM="systemd"
+    elif command -v rc-service >/dev/null 2>&1; then
+        INIT_SYSTEM="openrc"
+    else
+        print_error "Unsupported init system. Only systemd and OpenRC are supported."
+        exit 1
+    fi
+    print_info "Detected init system: $INIT_SYSTEM"
 }
 
 # Get latest version from GitHub releases
@@ -192,8 +207,8 @@ setup_cert_directory() {
     fi
 }
 
-# Create systemd service
-create_service() {
+# Create systemd service file
+create_systemd_service() {
     print_info "Creating systemd service..."
 
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
@@ -224,20 +239,81 @@ EOF
     print_info "Systemd service created"
 }
 
+# Create OpenRC service file
+create_openrc_service() {
+    print_info "Creating OpenRC service..."
+
+    cat > "/etc/init.d/${SERVICE_NAME}" << 'INITEOF'
+#!/sbin/openrc-run
+# Orrisp Node Agent OpenRC init script
+
+name="orrisp"
+description="Orrisp Node Agent"
+command="/usr/local/bin/orrisp"
+command_args="-c /etc/orrisp/config.yaml"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/orrisp.log"
+error_log="/var/log/orrisp.log"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath --file --mode 0644 "$output_log"
+}
+INITEOF
+
+    chmod +x "/etc/init.d/${SERVICE_NAME}"
+    print_info "OpenRC service created"
+}
+
+# Create service (dispatcher)
+create_service() {
+    case "$INIT_SYSTEM" in
+        systemd)
+            create_systemd_service
+            ;;
+        openrc)
+            create_openrc_service
+            ;;
+    esac
+}
+
 # Start service
 start_service() {
     print_info "Enabling and starting service..."
-    systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1
-    systemctl start "${SERVICE_NAME}"
+    case "$INIT_SYSTEM" in
+        systemd)
+            systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1
+            systemctl start "${SERVICE_NAME}"
+            ;;
+        openrc)
+            rc-update add "${SERVICE_NAME}" default >/dev/null 2>&1
+            rc-service "${SERVICE_NAME}" start
+            ;;
+    esac
     print_info "Service started successfully"
 }
 
 # Stop service
 stop_service() {
-    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-        print_info "Stopping service..."
-        systemctl stop "${SERVICE_NAME}" || true
-    fi
+    case "$INIT_SYSTEM" in
+        systemd)
+            if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+                print_info "Stopping service..."
+                systemctl stop "${SERVICE_NAME}" || true
+            fi
+            ;;
+        openrc)
+            if rc-service "${SERVICE_NAME}" status >/dev/null 2>&1; then
+                print_info "Stopping service..."
+                rc-service "${SERVICE_NAME}" stop || true
+            fi
+            ;;
+    esac
 }
 
 # Install function
@@ -292,8 +368,9 @@ install() {
 
     print_info "Starting Orrisp Node Agent installation..."
 
-    # Detect platform
+    # Detect platform and init system
     detect_platform
+    detect_init_system
 
     # Stop existing service if running
     stop_service
@@ -335,10 +412,20 @@ install() {
     print_info "Installation completed successfully!"
     echo ""
     echo "Useful commands:"
-    echo "  Check status:  systemctl status ${SERVICE_NAME}"
-    echo "  View logs:     journalctl -u ${SERVICE_NAME} -f"
-    echo "  Restart:       systemctl restart ${SERVICE_NAME}"
-    echo "  Stop:          systemctl stop ${SERVICE_NAME}"
+    case "$INIT_SYSTEM" in
+        systemd)
+            echo "  Check status:  systemctl status ${SERVICE_NAME}"
+            echo "  View logs:     journalctl -u ${SERVICE_NAME} -f"
+            echo "  Restart:       systemctl restart ${SERVICE_NAME}"
+            echo "  Stop:          systemctl stop ${SERVICE_NAME}"
+            ;;
+        openrc)
+            echo "  Check status:  rc-service ${SERVICE_NAME} status"
+            echo "  View logs:     tail -f ${LOG_FILE}"
+            echo "  Restart:       rc-service ${SERVICE_NAME} restart"
+            echo "  Stop:          rc-service ${SERVICE_NAME} stop"
+            ;;
+    esac
     echo "  Edit config:   nano ${CONFIG_FILE}"
     echo ""
     echo "Certificate storage:"
@@ -393,27 +480,56 @@ kill_process() {
 uninstall() {
     print_info "Starting Orrisp Node Agent uninstallation..."
 
-    # Stop and disable service
-    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-        print_info "Stopping service..."
-        systemctl stop "${SERVICE_NAME}" || true
-        sleep 2
-    fi
+    # Detect init system for proper cleanup
+    detect_init_system
 
-    if systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null; then
-        print_info "Disabling service..."
-        systemctl disable "${SERVICE_NAME}" || true
-    fi
+    # Stop and disable service based on init system
+    case "$INIT_SYSTEM" in
+        systemd)
+            if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+                print_info "Stopping service..."
+                systemctl stop "${SERVICE_NAME}" || true
+                sleep 2
+            fi
 
-    # Ensure process is killed (handles non-systemd starts)
+            if systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null; then
+                print_info "Disabling service..."
+                systemctl disable "${SERVICE_NAME}" || true
+            fi
+            ;;
+        openrc)
+            if rc-service "${SERVICE_NAME}" status >/dev/null 2>&1; then
+                print_info "Stopping service..."
+                rc-service "${SERVICE_NAME}" stop || true
+                sleep 2
+            fi
+
+            if rc-update show default 2>/dev/null | grep -q "${SERVICE_NAME}"; then
+                print_info "Disabling service..."
+                rc-update del "${SERVICE_NAME}" default || true
+            fi
+            ;;
+    esac
+
+    # Ensure process is killed (handles non-service starts)
     kill_process
 
-    # Remove service file
-    if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
-        print_info "Removing service file..."
-        rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-        systemctl daemon-reload
-    fi
+    # Remove service file based on init system
+    case "$INIT_SYSTEM" in
+        systemd)
+            if [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
+                print_info "Removing service file..."
+                rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+                systemctl daemon-reload
+            fi
+            ;;
+        openrc)
+            if [ -f "/etc/init.d/${SERVICE_NAME}" ]; then
+                print_info "Removing service file..."
+                rm -f "/etc/init.d/${SERVICE_NAME}"
+            fi
+            ;;
+    esac
 
     # Remove binary
     if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
@@ -443,6 +559,12 @@ uninstall() {
     if [ -d "/tmp/orrisp" ]; then
         print_info "Removing temp directory..."
         rm -rf "/tmp/orrisp"
+    fi
+
+    # Remove log file (OpenRC)
+    if [ -f "$LOG_FILE" ]; then
+        print_info "Removing log file..."
+        rm -f "$LOG_FILE"
     fi
 
     print_info "Uninstallation completed successfully!"
