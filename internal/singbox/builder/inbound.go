@@ -101,24 +101,30 @@ func buildTrojanInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscrip
 	// Convert netip.Addr to badoption.Addr
 	badAddr := badoption.Addr(listenAddr)
 
-	inbound := &option.Inbound{
-		Type: "trojan",
-		Tag:  "trojan-in",
-		Options: &option.TrojanInboundOptions{
-			ListenOptions: option.ListenOptions{
-				Listen:     &badAddr,
-				ListenPort: uint16(nodeConfig.ServerPort),
-				//lint:ignore SA1019 InboundOptions is embedded in ListenOptions, still functional
-				InboundOptions: option.InboundOptions{
-					SniffEnabled:             true,  // Enable sniffing to detect destination domain
-					SniffOverrideDestination: false, // Keep original destination
-				},
-			},
-			Users: users,
-			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
-				TLS: buildTLSOptions(nodeConfig),
+	trojanOpts := &option.TrojanInboundOptions{
+		ListenOptions: option.ListenOptions{
+			Listen:     &badAddr,
+			ListenPort: uint16(nodeConfig.ServerPort),
+			//lint:ignore SA1019 InboundOptions is embedded in ListenOptions, still functional
+			InboundOptions: option.InboundOptions{
+				SniffEnabled:             true,  // Enable sniffing to detect destination domain
+				SniffOverrideDestination: false, // Keep original destination
 			},
 		},
+		Users: users,
+		InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
+			TLS: buildTLSOptions(nodeConfig),
+		},
+	}
+
+	if transport := buildInboundTransport(nodeConfig); transport != nil {
+		trojanOpts.Transport = transport
+	}
+
+	inbound := &option.Inbound{
+		Type:    "trojan",
+		Tag:     "trojan-in",
+		Options: trojanOpts,
 	}
 
 	return inbound, nil
@@ -154,24 +160,30 @@ func buildVlessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 	// Convert netip.Addr to badoption.Addr
 	badAddr := badoption.Addr(listenAddr)
 
-	inbound := &option.Inbound{
-		Type: "vless",
-		Tag:  "vless-in",
-		Options: &option.VLESSInboundOptions{
-			ListenOptions: option.ListenOptions{
-				Listen:     &badAddr,
-				ListenPort: uint16(nodeConfig.ServerPort),
-				//lint:ignore SA1019 InboundOptions is embedded in ListenOptions, still functional
-				InboundOptions: option.InboundOptions{
-					SniffEnabled:             true,  // Enable sniffing to detect destination domain
-					SniffOverrideDestination: false, // Keep original destination
-				},
-			},
-			Users: users,
-			InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
-				TLS: buildTLSOptions(nodeConfig),
+	vlessOpts := &option.VLESSInboundOptions{
+		ListenOptions: option.ListenOptions{
+			Listen:     &badAddr,
+			ListenPort: uint16(nodeConfig.ServerPort),
+			//lint:ignore SA1019 InboundOptions is embedded in ListenOptions, still functional
+			InboundOptions: option.InboundOptions{
+				SniffEnabled:             true,  // Enable sniffing to detect destination domain
+				SniffOverrideDestination: false, // Keep original destination
 			},
 		},
+		Users: users,
+		InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
+			TLS: buildTLSOptions(nodeConfig),
+		},
+	}
+
+	if transport := buildInboundTransport(nodeConfig); transport != nil {
+		vlessOpts.Transport = transport
+	}
+
+	inbound := &option.Inbound{
+		Type:    "vless",
+		Tag:     "vless-in",
+		Options: vlessOpts,
 	}
 
 	return inbound, nil
@@ -207,27 +219,31 @@ func buildVMessInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscript
 	// Convert netip.Addr to badoption.Addr
 	badAddr := badoption.Addr(listenAddr)
 
-	inbound := &option.Inbound{
-		Type: "vmess",
-		Tag:  "vmess-in",
-		Options: &option.VMessInboundOptions{
-			ListenOptions: option.ListenOptions{
-				Listen:     &badAddr,
-				ListenPort: uint16(nodeConfig.ServerPort),
-				//lint:ignore SA1019 InboundOptions is embedded in ListenOptions, still functional
-				InboundOptions: option.InboundOptions{
-					SniffEnabled:             true,  // Enable sniffing to detect destination domain
-					SniffOverrideDestination: false, // Keep original destination
-				},
+	vmessOpts := &option.VMessInboundOptions{
+		ListenOptions: option.ListenOptions{
+			Listen:     &badAddr,
+			ListenPort: uint16(nodeConfig.ServerPort),
+			//lint:ignore SA1019 InboundOptions is embedded in ListenOptions, still functional
+			InboundOptions: option.InboundOptions{
+				SniffEnabled:             true,  // Enable sniffing to detect destination domain
+				SniffOverrideDestination: false, // Keep original destination
 			},
-			Users: users,
 		},
+		Users: users,
 	}
 
-	// Add TLS configuration if enabled
 	if nodeConfig.VMessTLS {
-		vmessOpts := inbound.Options.(*option.VMessInboundOptions)
 		vmessOpts.TLS = buildTLSOptions(nodeConfig)
+	}
+
+	if transport := buildInboundTransport(nodeConfig); transport != nil {
+		vmessOpts.Transport = transport
+	}
+
+	inbound := &option.Inbound{
+		Type:    "vmess",
+		Tag:     "vmess-in",
+		Options: vmessOpts,
 	}
 
 	return inbound, nil
@@ -364,4 +380,108 @@ func buildTUICInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscripti
 	}
 
 	return inbound, nil
+}
+
+// buildAnyTLSInbound builds AnyTLS inbound configuration.
+// AnyTLS uses password-based authentication with TLS.
+func buildAnyTLSInbound(nodeConfig *api.NodeConfig, subscriptions []api.Subscription) (*option.Inbound, error) {
+	// Validate port range
+	if nodeConfig.ServerPort <= 0 || nodeConfig.ServerPort > 65535 {
+		return nil, fmt.Errorf("invalid server port: %d", nodeConfig.ServerPort)
+	}
+
+	// Parse listen address
+	listenAddr, err := netip.ParseAddr(nodeConfig.ServerHost)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse listen address: %w", err)
+	}
+
+	// Build user list
+	if len(subscriptions) == 0 {
+		return nil, fmt.Errorf("no subscriptions available for anytls inbound")
+	}
+
+	users := make([]option.AnyTLSUser, 0, len(subscriptions))
+	for _, sub := range subscriptions {
+		users = append(users, option.AnyTLSUser{
+			Name:     sub.Name,
+			Password: sub.Password,
+		})
+	}
+
+	// Convert netip.Addr to badoption.Addr
+	badAddr := badoption.Addr(listenAddr)
+
+	anytlsOpts := &option.AnyTLSInboundOptions{
+		ListenOptions: option.ListenOptions{
+			Listen:     &badAddr,
+			ListenPort: uint16(nodeConfig.ServerPort),
+			//lint:ignore SA1019 InboundOptions is embedded in ListenOptions, still functional
+			InboundOptions: option.InboundOptions{
+				SniffEnabled:             true,
+				SniffOverrideDestination: false,
+			},
+		},
+		Users: users,
+		InboundTLSOptionsContainer: option.InboundTLSOptionsContainer{
+			TLS: buildTLSOptions(nodeConfig),
+		},
+	}
+
+	inbound := &option.Inbound{
+		Type:    "anytls",
+		Tag:     "anytls-in",
+		Options: anytlsOpts,
+	}
+
+	return inbound, nil
+}
+
+// buildInboundTransport builds V2Ray transport options for inbound from NodeConfig.
+// Returns nil if transport is tcp or empty (no transport layer needed).
+func buildInboundTransport(nodeConfig *api.NodeConfig) *option.V2RayTransportOptions {
+	switch nodeConfig.TransportProtocol {
+	case "ws":
+		transport := &option.V2RayTransportOptions{
+			Type: "ws",
+			WebsocketOptions: option.V2RayWebsocketOptions{
+				Path: nodeConfig.Path,
+			},
+		}
+		if nodeConfig.Host != "" {
+			transport.WebsocketOptions.Headers = badoption.HTTPHeader{
+				"Host": badoption.Listable[string]{nodeConfig.Host},
+			}
+		}
+		return transport
+
+	case "grpc":
+		return &option.V2RayTransportOptions{
+			Type: "grpc",
+			GRPCOptions: option.V2RayGRPCOptions{
+				ServiceName: nodeConfig.ServiceName,
+			},
+		}
+
+	case "http", "h2":
+		transport := &option.V2RayTransportOptions{
+			Type: "http",
+			HTTPOptions: option.V2RayHTTPOptions{
+				Path: nodeConfig.Path,
+			},
+		}
+		if nodeConfig.Host != "" {
+			transport.HTTPOptions.Host = badoption.Listable[string]{nodeConfig.Host}
+		}
+		return transport
+
+	case "quic":
+		return &option.V2RayTransportOptions{
+			Type: "quic",
+		}
+
+	default:
+		// tcp or empty: no transport layer
+		return nil
+	}
 }

@@ -52,16 +52,23 @@ type Service struct {
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 
+	// Serializes sing-box start/reload operations to prevent concurrent access
+	singboxMu sync.Mutex
+
+	// Serializes config reload pipelines (fetch→sync→reload) to prevent
+	// concurrent pipelines from overwriting each other's results
+	configMu sync.Mutex
+
 	// Hub connection state
 	hubConnected       bool
 	hubDisconnect      chan struct{} // Signal when hub disconnects (broadcast via close)
 	hubDisconnectOnce  *sync.Once    // Ensures hubDisconnect is closed exactly once per connection
 
-	// TLS certificate paths (auto-generated if not configured)
-	certPath     string
-	keyPath      string
-	certInitOnce sync.Once
-	certInitErr  error
+	// TLS certificate (auto-generated if not configured)
+	certMu  sync.Mutex // protects cert fields below
+	certSNI string     // SNI for current self-signed cert; empty if using configured paths
+	certPath string
+	keyPath  string
 
 	// Cached public IP addresses
 	cachedPublicIPv4 string
@@ -139,13 +146,16 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 
 	// 2. Get user list
-	if err := s.syncUsers(); err != nil {
+	if _, err := s.syncUsers(); err != nil {
 		cleanupOnFailure()
 		return fmt.Errorf("failed to sync users: %w", err)
 	}
 
 	// 3. Start sing-box
-	if err := s.startSingbox(); err != nil {
+	s.singboxMu.Lock()
+	err := s.startSingbox()
+	s.singboxMu.Unlock()
+	if err != nil {
 		cleanupOnFailure()
 		return fmt.Errorf("failed to start sing-box: %w", err)
 	}
@@ -212,8 +222,12 @@ func (s *Service) Stop() error {
 	}
 
 	// Stop sing-box
-	if s.singboxService != nil {
-		if err := s.singboxService.Close(); err != nil {
+	s.singboxMu.Lock()
+	svc := s.singboxService
+	s.singboxService = nil
+	s.singboxMu.Unlock()
+	if svc != nil {
+		if err := svc.Close(); err != nil {
 			s.logger.Error("Failed to stop sing-box", slog.Any("err", err))
 		}
 	}
@@ -257,10 +271,14 @@ func (s *Service) GetNodeInfo() map[string]interface{} {
 func (s *Service) fetchNodeConfig() error {
 	s.logger.Info("Fetching node configuration...")
 
+	s.mu.RLock()
+	client := s.apiClient
+	s.mu.RUnlock()
+
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 
-	nodeConfig, err := s.apiClient.GetConfig(ctx)
+	nodeConfig, err := client.GetConfig(ctx)
 	if err != nil {
 		return err
 	}

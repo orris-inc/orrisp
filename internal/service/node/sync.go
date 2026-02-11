@@ -9,16 +9,22 @@ import (
 	"github.com/easayliu/orrisp/internal/api"
 )
 
-// syncUsers synchronizes user list from the API
-func (s *Service) syncUsers() error {
+// syncUsers synchronizes user list from the API.
+// Returns true if the user list changed. Callers are responsible for
+// triggering a sing-box reload when needed to avoid double-reload.
+func (s *Service) syncUsers() (bool, error) {
 	s.logger.Debug("Synchronizing user list...")
+
+	s.mu.RLock()
+	client := s.apiClient
+	s.mu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 
-	users, err := s.apiClient.GetSubscriptions(ctx)
+	users, err := client.GetSubscriptions(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get user list: %w", err)
+		return false, fmt.Errorf("failed to get user list: %w", err)
 	}
 
 	s.mu.Lock()
@@ -29,37 +35,16 @@ func (s *Service) syncUsers() error {
 	// Update traffic tracker user mapping
 	s.updateUserMap(users)
 
-	s.logger.Info("User list synchronized successfully",
-		slog.Int("old_count", len(oldUsers)),
-		slog.Int("new_count", len(users)),
-	)
-
 	// Check if user list actually changed (compare content, not just count)
 	changed := s.usersChanged(oldUsers, users)
 
-	// Check singboxService under read lock to avoid race condition
-	s.mu.RLock()
-	hasSingbox := s.singboxService != nil
-	s.mu.RUnlock()
+	s.logger.Info("User list synchronized",
+		slog.Int("old_count", len(oldUsers)),
+		slog.Int("new_count", len(users)),
+		slog.Bool("changed", changed),
+	)
 
-	if changed && hasSingbox {
-		s.logger.Info("User list changed, reloading sing-box...",
-			slog.Int("old_users", len(oldUsers)),
-			slog.Int("new_users", len(users)),
-		)
-		if err := s.reloadSingbox(); err != nil {
-			s.logger.Error("Failed to reload sing-box", slog.Any("err", err))
-			return err
-		}
-		s.logger.Info("sing-box reloaded with new user list")
-	} else {
-		s.logger.Info("User list sync completed",
-			slog.Bool("changed", changed),
-			slog.Bool("singbox_running", hasSingbox),
-		)
-	}
-
-	return nil
+	return changed, nil
 }
 
 // usersChanged checks if the user list has actually changed

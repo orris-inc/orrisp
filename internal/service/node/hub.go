@@ -262,7 +262,16 @@ func (s *Service) startRESTFallback(ctx context.Context) {
 	// User synchronization task
 	s.wg.Add(1)
 	go s.scheduleTaskWithContext(ctx, "REST: User sync", s.config.GetUserSyncInterval(), func() error {
-		return s.syncUsers()
+		changed, err := s.syncUsers()
+		if err != nil {
+			return err
+		}
+		if changed {
+			if err := s.reloadSingbox(); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 
 	// Traffic report task

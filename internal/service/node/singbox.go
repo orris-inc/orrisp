@@ -10,7 +10,8 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
-// startSingbox starts sing-box service
+// startSingbox starts sing-box service.
+// Must be called with s.singboxMu held.
 func (s *Service) startSingbox() error {
 	s.logger.Info("Starting sing-box...")
 
@@ -39,8 +40,12 @@ func (s *Service) startSingbox() error {
 	return nil
 }
 
-// reloadSingbox reloads sing-box configuration
+// reloadSingbox reloads sing-box configuration.
+// Serialized by s.singboxMu to prevent concurrent start/reload.
 func (s *Service) reloadSingbox() error {
+	s.singboxMu.Lock()
+	defer s.singboxMu.Unlock()
+
 	if s.singboxService == nil {
 		return s.startSingbox()
 	}
@@ -101,7 +106,8 @@ func (s *Service) generateSingboxOptions() (*option.Options, error) {
 		nodeConfig.Protocol == "vless" ||
 		(nodeConfig.Protocol == "vmess" && nodeConfig.VMessTLS) ||
 		nodeConfig.Protocol == "hysteria2" ||
-		nodeConfig.Protocol == "tuic") && !isReality
+		nodeConfig.Protocol == "tuic" ||
+		nodeConfig.Protocol == "anytls") && !isReality
 
 	if requiresTLS {
 		// Ensure certificate exists (generate self-signed if not configured)
@@ -148,6 +154,13 @@ func (s *Service) generateSingboxOptions() (*option.Options, error) {
 						tuicOpts.TLS.KeyPath = keyPath
 					}
 				}
+			case "anytls":
+				if anytlsOpts, ok := options.Inbounds[i].Options.(*option.AnyTLSInboundOptions); ok {
+					if anytlsOpts.TLS != nil {
+						anytlsOpts.TLS.CertificatePath = certPath
+						anytlsOpts.TLS.KeyPath = keyPath
+					}
+				}
 			}
 		}
 	}
@@ -156,24 +169,43 @@ func (s *Service) generateSingboxOptions() (*option.Options, error) {
 }
 
 // ensureTLSCert ensures TLS certificate exists, generates self-signed if not configured.
-// This method is safe for concurrent access using sync.Once.
+// When SNI changes, self-signed certificates are regenerated automatically.
+// Configured certificate paths (from nodeInstance) are never regenerated.
 func (s *Service) ensureTLSCert(sni string) (string, string, error) {
-	s.certInitOnce.Do(func() {
-		s.certInitErr = s.initTLSCert(sni)
-	})
+	s.certMu.Lock()
+	defer s.certMu.Unlock()
 
-	if s.certInitErr != nil {
-		return "", "", s.certInitErr
+	// If using configured cert paths (certSNI stays empty), return cached result
+	if s.certPath != "" && s.certSNI == "" {
+		return s.certPath, s.keyPath, nil
+	}
+
+	// If self-signed cert already matches current SNI, reuse it
+	if s.certPath != "" && s.certSNI == sni {
+		return s.certPath, s.keyPath, nil
+	}
+
+	// SNI changed, regenerate self-signed certificate
+	if s.certSNI != "" && s.certSNI != sni {
+		s.logger.Info("SNI changed, regenerating self-signed TLS certificate",
+			slog.String("old_sni", s.certSNI),
+			slog.String("new_sni", sni),
+		)
+	}
+
+	if err := s.initTLSCert(sni); err != nil {
+		return "", "", err
 	}
 	return s.certPath, s.keyPath, nil
 }
 
-// initTLSCert initializes TLS certificate paths. Called once via sync.Once.
+// initTLSCert initializes TLS certificate paths. Called under s.certMu.
 func (s *Service) initTLSCert(sni string) error {
 	// Use configured paths if available (check node instance first)
 	if s.nodeInstance.CertPath != "" && s.nodeInstance.KeyPath != "" {
 		s.certPath = s.nodeInstance.CertPath
 		s.keyPath = s.nodeInstance.KeyPath
+		s.certSNI = "" // empty means configured paths, no regeneration needed
 		s.logger.Info("Using configured TLS certificate",
 			slog.String("cert_path", s.certPath),
 			slog.String("key_path", s.keyPath),
@@ -212,6 +244,7 @@ func (s *Service) initTLSCert(sni string) error {
 
 	s.certPath = selfSigned.CertPath
 	s.keyPath = selfSigned.KeyPath
+	s.certSNI = sni
 	s.logger.Info("Self-signed TLS certificate generated",
 		slog.String("cert_path", s.certPath),
 		slog.String("key_path", s.keyPath),

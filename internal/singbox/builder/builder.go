@@ -78,6 +78,13 @@ func BuildConfig(nodeConfig *api.NodeConfig, subscriptions []api.Subscription, c
 		}
 		options.Inbounds = append(options.Inbounds, *inbound)
 
+	case "anytls":
+		inbound, err := buildAnyTLSInbound(nodeConfig, subscriptions)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build anytls inbound config: %w", err)
+		}
+		options.Inbounds = append(options.Inbounds, *inbound)
+
 	default:
 		return nil, fmt.Errorf("unsupported protocol type: %s", nodeConfig.Protocol)
 	}

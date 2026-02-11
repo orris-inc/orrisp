@@ -23,11 +23,14 @@ func (s *Service) OnCommand(cmd *api.CommandData) {
 	case api.CmdActionReloadConfig:
 		s.logger.Info("Executing reload config command")
 		go func() {
+			s.configMu.Lock()
+			defer s.configMu.Unlock()
+
 			if err := s.fetchNodeConfig(); err != nil {
 				s.logger.Error("Failed to reload config", slog.Any("err", err))
 				return
 			}
-			if err := s.syncUsers(); err != nil {
+			if _, err := s.syncUsers(); err != nil {
 				s.logger.Error("Failed to sync users", slog.Any("err", err))
 				return
 			}
@@ -143,11 +146,14 @@ func (s *Service) OnConfigSync(sync *api.ConfigSyncData) {
 	if sync.Config == nil {
 		s.logger.Debug("Config sync has no config data, fetching via REST")
 		go func() {
+			s.configMu.Lock()
+			defer s.configMu.Unlock()
+
 			if err := s.fetchNodeConfig(); err != nil {
 				s.logger.Error("Failed to fetch config after sync notification", slog.Any("err", err))
 				return
 			}
-			if err := s.syncUsers(); err != nil {
+			if _, err := s.syncUsers(); err != nil {
 				s.logger.Error("Failed to sync users after config sync", slog.Any("err", err))
 				return
 			}
@@ -158,24 +164,30 @@ func (s *Service) OnConfigSync(sync *api.ConfigSyncData) {
 		return
 	}
 
-	// Apply config from Hub directly
-	s.mu.Lock()
-	s.nodeConfig = s.convertHubConfigToNodeConfig(sync.Config)
-	s.mu.Unlock()
+	// Skip reload if protocol is not configured yet
+	if sync.Config.Protocol == "" {
+		s.mu.Lock()
+		s.nodeConfig = s.convertHubConfigToNodeConfig(sync.Config)
+		s.mu.Unlock()
+		s.logger.Warn("Skipping singbox reload: protocol not configured")
+		return
+	}
 
-	s.logger.Info("Config updated from hub sync",
-		slog.String("node_sid", sync.Config.NodeSID),
-		slog.String("protocol", sync.Config.Protocol),
-		slog.String("security", sync.Config.Security),
-		slog.String("flow", sync.Config.Flow),
-		slog.String("public_key", sync.Config.PublicKey),
-		slog.String("short_id", sync.Config.ShortID),
-		slog.String("sni", sync.Config.SNI),
-	)
-
-	// Reload sing-box with new config
+	// Apply config, sync users, and reload sing-box atomically
 	go func() {
-		if err := s.syncUsers(); err != nil {
+		s.configMu.Lock()
+		defer s.configMu.Unlock()
+
+		s.mu.Lock()
+		s.nodeConfig = s.convertHubConfigToNodeConfig(sync.Config)
+		s.mu.Unlock()
+
+		s.logger.Info("Config updated from hub sync",
+			slog.String("protocol", sync.Config.Protocol),
+			slog.Int("server_port", sync.Config.ServerPort),
+		)
+
+		if _, err := s.syncUsers(); err != nil {
 			s.logger.Error("Failed to sync users after hub config sync", slog.Any("err", err))
 			return
 		}
@@ -230,6 +242,12 @@ func (s *Service) convertHubConfigToNodeConfig(hubConfig *api.ConfigData) *api.N
 		TUICUDPRelayMode:      hubConfig.UDPRelayMode,
 		TUICAlpn:              hubConfig.ALPN,
 		TUICDisableSNI:        hubConfig.DisableSNI,
+
+		// AnyTLS specific fields
+		AnyTLSFingerprint:              hubConfig.AnyTLSFingerprint,
+		AnyTLSIdleSessionCheckInterval: hubConfig.AnyTLSIdleSessionCheckInterval,
+		AnyTLSIdleSessionTimeout:       hubConfig.AnyTLSIdleSessionTimeout,
+		AnyTLSMinIdleSession:           hubConfig.AnyTLSMinIdleSession,
 	}
 }
 

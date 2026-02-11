@@ -21,7 +21,16 @@ func (s *Service) startScheduledTasks() {
 	// User synchronization task
 	s.wg.Add(1)
 	go s.scheduleTask("User synchronization", s.config.GetUserSyncInterval(), func() error {
-		return s.syncUsers()
+		changed, err := s.syncUsers()
+		if err != nil {
+			return err
+		}
+		if changed {
+			if err := s.reloadSingbox(); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 
 	// Traffic report task

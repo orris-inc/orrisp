@@ -2,6 +2,7 @@ package builder
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/easayliu/orrisp/internal/api"
 	"github.com/sagernet/sing-box/option"
@@ -169,6 +170,16 @@ func convertOutbound(ob api.Outbound) (option.Outbound, error) {
 		if ob.Password == "" {
 			return outbound, fmt.Errorf("password is required for %s outbound %q", ob.Type, ob.Tag)
 		}
+	case "anytls":
+		if ob.Server == "" {
+			return outbound, fmt.Errorf("server address is required for %s outbound %q", ob.Type, ob.Tag)
+		}
+		if ob.Port <= 0 || ob.Port > 65535 {
+			return outbound, fmt.Errorf("invalid server port for %s outbound %q", ob.Type, ob.Tag)
+		}
+		if ob.Password == "" {
+			return outbound, fmt.Errorf("password is required for %s outbound %q", ob.Type, ob.Tag)
+		}
 	}
 
 	switch ob.Type {
@@ -282,6 +293,46 @@ func convertOutbound(ob api.Outbound) (option.Outbound, error) {
 			tuicOpts.UDPRelayMode = ob.TUICUDPRelayMode
 		}
 		outbound.Options = &tuicOpts
+
+	case "anytls":
+		anytlsOpts := option.AnyTLSOutboundOptions{
+			ServerOptions: option.ServerOptions{
+				Server:     ob.Server,
+				ServerPort: uint16(ob.Port),
+			},
+			Password: ob.Password,
+		}
+		if ob.TLS != nil {
+			tlsOpts := convertOutboundTLS(ob.TLS)
+			// Set UTLS fingerprint for AnyTLS if configured
+			if ob.AnyTLSFingerprint != "" {
+				if tlsOpts.UTLS == nil {
+					tlsOpts.UTLS = &option.OutboundUTLSOptions{}
+				}
+				tlsOpts.UTLS.Fingerprint = ob.AnyTLSFingerprint
+			}
+			anytlsOpts.TLS = tlsOpts
+		}
+		if ob.AnyTLSIdleSessionCheckInterval != "" {
+			d, err := time.ParseDuration(ob.AnyTLSIdleSessionCheckInterval)
+			if err != nil {
+				return outbound, fmt.Errorf("invalid idle_session_check_interval %q for anytls outbound %q: %w",
+					ob.AnyTLSIdleSessionCheckInterval, ob.Tag, err)
+			}
+			anytlsOpts.IdleSessionCheckInterval = badoption.Duration(d)
+		}
+		if ob.AnyTLSIdleSessionTimeout != "" {
+			d, err := time.ParseDuration(ob.AnyTLSIdleSessionTimeout)
+			if err != nil {
+				return outbound, fmt.Errorf("invalid idle_session_timeout %q for anytls outbound %q: %w",
+					ob.AnyTLSIdleSessionTimeout, ob.Tag, err)
+			}
+			anytlsOpts.IdleSessionTimeout = badoption.Duration(d)
+		}
+		if ob.AnyTLSMinIdleSession > 0 {
+			anytlsOpts.MinIdleSession = ob.AnyTLSMinIdleSession
+		}
+		outbound.Options = &anytlsOpts
 
 	case "direct", "block":
 		// Simple types, no additional configuration needed

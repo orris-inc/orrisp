@@ -30,10 +30,14 @@ func (s *Service) reportTraffic() error {
 		)
 	}
 
+	s.mu.RLock()
+	client := s.apiClient
+	s.mu.RUnlock()
+
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 
-	result, err := s.apiClient.ReportTraffic(ctx, trafficItems)
+	result, err := client.ReportTraffic(ctx, trafficItems)
 	if err != nil {
 		s.logger.Error("Failed to report traffic", slog.Any("err", err))
 		// Restore traffic data to prevent data loss
@@ -58,10 +62,14 @@ func (s *Service) reportStatus() error {
 	// Collect system status
 	status := s.collectSystemStatus()
 
+	s.mu.RLock()
+	client := s.apiClient
+	s.mu.RUnlock()
+
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 
-	if err := s.apiClient.UpdateStatus(ctx, status); err != nil {
+	if err := client.UpdateStatus(ctx, status); err != nil {
 		s.logger.Error("Failed to report node status", slog.Any("err", err))
 		return err
 	}
@@ -83,10 +91,14 @@ func (s *Service) reportOnline() error {
 		return nil
 	}
 
+	s.mu.RLock()
+	client := s.apiClient
+	s.mu.RUnlock()
+
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
 
-	result, err := s.apiClient.UpdateOnlineSubscriptions(ctx, onlineUsers)
+	result, err := client.UpdateOnlineSubscriptions(ctx, onlineUsers)
 	if err != nil {
 		s.logger.Error("Failed to report online users", slog.Any("err", err))
 		return err
