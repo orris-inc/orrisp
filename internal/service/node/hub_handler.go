@@ -213,6 +213,7 @@ func (s *Service) convertHubConfigToNodeConfig(hubConfig *api.ConfigData) *api.N
 		SNI:               hubConfig.SNI,
 		AllowInsecure:     hubConfig.AllowInsecure,
 		Route:             hubConfig.Route,
+		DNS:               hubConfig.DNS,
 		Outbounds:         hubConfig.Outbounds,
 
 		// VLESS specific fields (map from simplified ConfigData field names)

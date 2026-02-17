@@ -207,9 +207,45 @@ setup_cert_directory() {
     fi
 }
 
+# Check if mount namespaces are supported (not available in some containers)
+check_namespace_support() {
+    # Check if we are in a container that lacks namespace support
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        local virt_type
+        virt_type=$(systemd-detect-virt --container 2>/dev/null || true)
+        case "$virt_type" in
+            openvz|lxc|lxc-libvirt)
+                return 1
+                ;;
+        esac
+    fi
+
+    # Test if unshare works (direct namespace support check)
+    if unshare --mount true 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
 # Create systemd service file
 create_systemd_service() {
     print_info "Creating systemd service..."
+
+    local security_opts=""
+    if check_namespace_support; then
+        security_opts="# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=${CONFIG_DIR} ${CERT_DIR} ${INSTALL_DIR}"
+        print_info "Namespace support detected, enabling security hardening"
+    else
+        security_opts="# Security hardening (limited: mount namespaces not available)
+NoNewPrivileges=true"
+        print_warn "Mount namespaces not supported, skipping ProtectSystem/ProtectHome/PrivateTmp"
+    fi
 
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
@@ -224,12 +260,7 @@ RestartSec=5
 StartLimitInterval=60
 StartLimitBurst=3
 
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-ReadWritePaths=${CONFIG_DIR} ${CERT_DIR} ${INSTALL_DIR}
+${security_opts}
 
 [Install]
 WantedBy=multi-user.target

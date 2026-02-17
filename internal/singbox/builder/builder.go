@@ -120,6 +120,12 @@ func BuildConfig(nodeConfig *api.NodeConfig, subscriptions []api.Subscription, c
 		options.Route = routeOpts
 	}
 
+	// Add DNS configuration if present
+	if nodeConfig.DNS != nil {
+		dnsOpts := buildDNSConfig(nodeConfig.DNS)
+		options.DNS = dnsOpts
+	}
+
 	return options, nil
 }
 

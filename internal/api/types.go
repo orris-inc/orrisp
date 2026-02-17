@@ -26,6 +26,7 @@ type NodeConfig struct {
 	DeviceLimit       int          `json:"device_limit"`
 	RuleListPath      string       `json:"rule_list_path,omitempty"` // Deprecated: use Route instead
 	Route             *RouteConfig `json:"route,omitempty"`          // Routing configuration for traffic splitting
+	DNS               *DnsConfig   `json:"dns,omitempty"`            // DNS configuration for DNS-based unlocking
 	Outbounds         []Outbound   `json:"outbounds,omitempty"`      // Outbound configs for nodes referenced in route rules
 
 	// VLESS specific fields
@@ -137,11 +138,22 @@ type OutboundTransport struct {
 	ServiceName string            `json:"service_name,omitempty"` // gRPC service name
 }
 
+// CustomOutbound represents a user-defined sing-box outbound configuration.
+// Route rules reference these via custom_xxx tags.
+type CustomOutbound struct {
+	Tag      string         `json:"tag"`                // Unique identifier, must start with "custom_"
+	Type     string         `json:"type"`               // Protocol type (shadowsocks, trojan, vless, vmess, hysteria2, tuic, anytls, socks, http)
+	Server   string         `json:"server"`             // Server hostname or IP address
+	Port     int            `json:"server_port"`        // Server port number
+	Settings map[string]any `json:"settings,omitempty"` // Protocol-specific configuration (password, uuid, method, tls, transport, etc.)
+}
+
 // RouteConfig represents the routing configuration for sing-box.
 // It defines how traffic should be routed based on matching rules.
 type RouteConfig struct {
-	Rules []RouteRule `json:"rules,omitempty"` // Ordered list of routing rules
-	Final string      `json:"final"`           // Default outbound when no rules match (direct/block/proxy or node_xxx)
+	Rules           []RouteRule      `json:"rules,omitempty"`            // Ordered list of routing rules
+	Final           string           `json:"final"`                      // Default outbound when no rules match (direct/block/proxy/node_xxx/custom_xxx)
+	CustomOutbounds []CustomOutbound `json:"custom_outbounds,omitempty"` // User-defined outbound configurations
 }
 
 // RouteRule represents a single routing rule, compatible with sing-box route rule.
@@ -174,6 +186,43 @@ type RouteRule struct {
 
 	// Action
 	Outbound string `json:"outbound"` // Action: direct/block/proxy or node_xxx (for routing to specific node)
+}
+
+// DnsConfig represents the DNS configuration for sing-box.
+// It defines DNS servers and routing rules for DNS-based unlocking.
+type DnsConfig struct {
+	Servers          []DnsServer `json:"servers,omitempty"`     // DNS servers
+	Rules            []DnsRule   `json:"rules,omitempty"`       // DNS routing rules
+	Final            string      `json:"final"`                 // Default DNS server tag
+	Strategy         string      `json:"strategy,omitempty"`    // Global DNS strategy (prefer_ipv4, prefer_ipv6, ipv4_only, ipv6_only)
+	DisableCache     bool        `json:"disable_cache"`         // Disable DNS cache
+	DisableExpire    bool        `json:"disable_expire"`        // Disable DNS cache expiration
+	IndependentCache bool        `json:"independent_cache"`     // Independent cache per DNS server
+	ReverseMapping   bool        `json:"reverse_mapping"`       // Enable reverse DNS mapping
+}
+
+// DnsServer represents a DNS server entry, compatible with sing-box dns.servers[].
+type DnsServer struct {
+	Tag             string `json:"tag"`                        // Unique identifier
+	Address         string `json:"address"`                    // DNS address (e.g., "https://1.1.1.1/dns-query", "tls://8.8.8.8")
+	AddressResolver string `json:"address_resolver,omitempty"` // Tag of another server to resolve this server's address
+	AddressStrategy string `json:"address_strategy,omitempty"` // Strategy for resolving this server's address
+	Strategy        string `json:"strategy,omitempty"`         // DNS resolution strategy for this server
+	Detour          string `json:"detour,omitempty"`           // Outbound tag (direct/proxy/node_xxx/custom_xxx)
+}
+
+// DnsRule represents a DNS routing rule, compatible with sing-box dns.rules[].
+type DnsRule struct {
+	Domain        []string `json:"domain,omitempty"`         // Exact domain match
+	DomainSuffix  []string `json:"domain_suffix,omitempty"`  // Domain suffix match
+	DomainKeyword []string `json:"domain_keyword,omitempty"` // Domain keyword match
+	DomainRegex   []string `json:"domain_regex,omitempty"`   // Domain regex match
+	Geosite       []string `json:"geosite,omitempty"`        // GeoSite categories
+	GeoIP         []string `json:"geoip,omitempty"`          // GeoIP country codes
+	RuleSet       []string `json:"rule_set,omitempty"`       // Rule set references
+	Outbound      []string `json:"outbound,omitempty"`       // Match by outbound tag
+	Server        string   `json:"server"`                   // Target DNS server tag
+	DisableCache  bool     `json:"disable_cache"`            // Disable cache for matched queries
 }
 
 // IsTrojan returns true if the node is configured for Trojan protocol.

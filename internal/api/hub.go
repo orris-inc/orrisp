@@ -164,6 +164,7 @@ type ConfigData struct {
 	SNI               string       `json:"sni,omitempty"`
 	AllowInsecure     bool         `json:"allow_insecure"`
 	Route             *RouteConfig `json:"route,omitempty"`     // Routing configuration for traffic splitting
+	DNS               *DnsConfig   `json:"dns,omitempty"`       // DNS configuration for DNS-based unlocking
 	Outbounds         []Outbound   `json:"outbounds,omitempty"` // Outbound configs for nodes referenced in route rules
 
 	// VLESS specific fields
