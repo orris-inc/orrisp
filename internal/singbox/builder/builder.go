@@ -114,8 +114,16 @@ func BuildConfig(nodeConfig *api.NodeConfig, subscriptions []api.Subscription, c
 		options.Outbounds = append(options.Outbounds, singOutbound)
 	}
 
-	// Add route configuration if present
+	// Add custom outbounds from route config
 	if nodeConfig.Route != nil {
+		for _, co := range nodeConfig.Route.CustomOutbounds {
+			singOutbound, err := convertCustomOutbound(co)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert custom outbound %s: %w", co.Tag, err)
+			}
+			options.Outbounds = append(options.Outbounds, singOutbound)
+		}
+
 		routeOpts := buildRouteConfig(nodeConfig.Route)
 		options.Route = routeOpts
 	}

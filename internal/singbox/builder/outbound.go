@@ -180,6 +180,13 @@ func convertOutbound(ob api.Outbound) (option.Outbound, error) {
 		if ob.Password == "" {
 			return outbound, fmt.Errorf("password is required for %s outbound %q", ob.Type, ob.Tag)
 		}
+	case "socks", "http":
+		if ob.Server == "" {
+			return outbound, fmt.Errorf("server address is required for %s outbound %q", ob.Type, ob.Tag)
+		}
+		if ob.Port <= 0 || ob.Port > 65535 {
+			return outbound, fmt.Errorf("invalid server port for %s outbound %q", ob.Type, ob.Tag)
+		}
 	}
 
 	switch ob.Type {
@@ -334,11 +341,103 @@ func convertOutbound(ob api.Outbound) (option.Outbound, error) {
 		}
 		outbound.Options = &anytlsOpts
 
+	case "socks":
+		socksOpts := option.SOCKSOutboundOptions{
+			ServerOptions: option.ServerOptions{
+				Server:     ob.Server,
+				ServerPort: uint16(ob.Port),
+			},
+		}
+		if ob.Password != "" {
+			socksOpts.Username = ob.UUID // Reuse UUID field as username for socks
+			socksOpts.Password = ob.Password
+		}
+		outbound.Options = &socksOpts
+
+	case "http":
+		httpOpts := option.HTTPOutboundOptions{
+			ServerOptions: option.ServerOptions{
+				Server:     ob.Server,
+				ServerPort: uint16(ob.Port),
+			},
+		}
+		if ob.Password != "" {
+			httpOpts.Username = ob.UUID // Reuse UUID field as username for http
+			httpOpts.Password = ob.Password
+		}
+		if ob.TLS != nil {
+			httpOpts.TLS = convertOutboundTLS(ob.TLS)
+		}
+		outbound.Options = &httpOpts
+
 	case "direct", "block":
 		// Simple types, no additional configuration needed
 
 	default:
 		return outbound, fmt.Errorf("unsupported outbound type: %s", ob.Type)
+	}
+
+	return outbound, nil
+}
+
+// convertCustomOutbound converts api.CustomOutbound to sing-box option.Outbound.
+// CustomOutbound uses a Settings map for protocol-specific configuration.
+func convertCustomOutbound(co api.CustomOutbound) (option.Outbound, error) {
+	outbound := option.Outbound{
+		Tag:  co.Tag,
+		Type: co.Type,
+	}
+
+	// Helper to extract string value from settings
+	getString := func(key string) string {
+		if v, ok := co.Settings[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+		return ""
+	}
+
+	// Validate required fields for proxy types
+	switch co.Type {
+	case "socks", "http":
+		if co.Server == "" {
+			return outbound, fmt.Errorf("server address is required for %s custom outbound %q", co.Type, co.Tag)
+		}
+		if co.Port <= 0 || co.Port > 65535 {
+			return outbound, fmt.Errorf("invalid server port for %s custom outbound %q", co.Type, co.Tag)
+		}
+	}
+
+	switch co.Type {
+	case "socks":
+		socksOpts := option.SOCKSOutboundOptions{
+			ServerOptions: option.ServerOptions{
+				Server:     co.Server,
+				ServerPort: uint16(co.Port),
+			},
+			Version:  getString("version"),
+			Username: getString("username"),
+			Password: getString("password"),
+		}
+		outbound.Options = &socksOpts
+
+	case "http":
+		httpOpts := option.HTTPOutboundOptions{
+			ServerOptions: option.ServerOptions{
+				Server:     co.Server,
+				ServerPort: uint16(co.Port),
+			},
+			Username: getString("username"),
+			Password: getString("password"),
+		}
+		outbound.Options = &httpOpts
+
+	case "direct", "block":
+		// Simple types, no additional configuration needed
+
+	default:
+		return outbound, fmt.Errorf("unsupported custom outbound type: %s", co.Type)
 	}
 
 	return outbound, nil
