@@ -82,9 +82,7 @@ func (s *Service) reportStatus() error {
 func (s *Service) reportOnline() error {
 	s.logger.Debug("Reporting online users...")
 
-	// TODO: Get online user information from sing-box
-	// Need to implement logic to get online users
-	onlineUsers := []api.OnlineSubscription{}
+	onlineUsers := s.trafficTracker.GetOnlineSubscriptions()
 
 	if len(onlineUsers) == 0 {
 		s.logger.Debug("No online users")

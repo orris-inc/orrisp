@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/easayliu/orrisp/internal/api"
 	"github.com/easayliu/orrisp/internal/stats"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing/common/buf"
@@ -14,12 +15,20 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
+// onlineKey identifies a unique (subscription, source IP) pair for online tracking.
+type onlineKey struct {
+	subscriptionSID string
+	ip              string
+}
+
 // TrafficTracker implements adapter.ConnectionTracker for traffic statistics
 type TrafficTracker struct {
 	statsClient *stats.Client
 	logger      *slog.Logger
-	mu          sync.RWMutex
-	userMap     map[string]string // username -> subscription_sid
+	userMu      sync.RWMutex       // protects userMap
+	userMap     map[string]string   // username -> subscription_sid
+	onlineMu    sync.RWMutex       // protects onlineMap
+	onlineMap   map[onlineKey]int   // active connection reference counts
 }
 
 // NewTrafficTracker creates a new traffic tracker
@@ -28,13 +37,14 @@ func NewTrafficTracker(statsClient *stats.Client, logger *slog.Logger) *TrafficT
 		statsClient: statsClient,
 		logger:      logger,
 		userMap:     make(map[string]string),
+		onlineMap:   make(map[onlineKey]int),
 	}
 }
 
 // SetUserMap sets the username to subscription SID mapping
 func (t *TrafficTracker) SetUserMap(userMap map[string]string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.userMu.Lock()
+	defer t.userMu.Unlock()
 	t.userMap = userMap
 	t.logger.Debug("User map updated",
 		slog.Int("user_count", len(userMap)),
@@ -43,10 +53,43 @@ func (t *TrafficTracker) SetUserMap(userMap map[string]string) {
 
 // getSubscriptionSID returns the subscription SID for a username
 func (t *TrafficTracker) getSubscriptionSID(username string) (string, bool) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	t.userMu.RLock()
+	defer t.userMu.RUnlock()
 	sid, ok := t.userMap[username]
 	return sid, ok
+}
+
+// trackConnection increments the reference count for a (sid, ip) pair.
+func (t *TrafficTracker) trackConnection(sid, ip string) {
+	t.onlineMu.Lock()
+	defer t.onlineMu.Unlock()
+	t.onlineMap[onlineKey{subscriptionSID: sid, ip: ip}]++
+}
+
+// untrackConnection decrements the reference count and removes the entry when it reaches zero.
+func (t *TrafficTracker) untrackConnection(sid, ip string) {
+	t.onlineMu.Lock()
+	defer t.onlineMu.Unlock()
+	key := onlineKey{subscriptionSID: sid, ip: ip}
+	if t.onlineMap[key] <= 1 {
+		delete(t.onlineMap, key)
+	} else {
+		t.onlineMap[key]--
+	}
+}
+
+// GetOnlineSubscriptions returns a snapshot of currently active (subscription, ip) pairs.
+func (t *TrafficTracker) GetOnlineSubscriptions() []api.OnlineSubscription {
+	t.onlineMu.RLock()
+	defer t.onlineMu.RUnlock()
+	result := make([]api.OnlineSubscription, 0, len(t.onlineMap))
+	for key := range t.onlineMap {
+		result = append(result, api.OnlineSubscription{
+			SubscriptionSID: key.subscriptionSID,
+			IP:              key.ip,
+		})
+	}
+	return result
 }
 
 // RoutedConnection wraps a TCP connection to track traffic
@@ -71,9 +114,13 @@ func (t *TrafficTracker) RoutedConnection(
 		return conn
 	}
 
+	sourceIP := metadata.Source.Addr.Unmap().String()
+	t.trackConnection(subSID, sourceIP)
+
 	t.logger.Debug("Connection tracked",
 		slog.String("user", username),
 		slog.String("subscription_sid", subSID),
+		slog.String("source_ip", sourceIP),
 		slog.String("inbound", metadata.Inbound),
 		slog.String("destination", metadata.Destination.String()),
 	)
@@ -82,6 +129,8 @@ func (t *TrafficTracker) RoutedConnection(
 		statsClient:     t.statsClient,
 		subscriptionSID: subSID,
 		logger:          t.logger,
+		tracker:         t,
+		sourceIP:        sourceIP,
 	}
 }
 
@@ -106,9 +155,13 @@ func (t *TrafficTracker) RoutedPacketConnection(
 		return conn
 	}
 
+	sourceIP := metadata.Source.Addr.Unmap().String()
+	t.trackConnection(subSID, sourceIP)
+
 	t.logger.Debug("Packet connection tracked",
 		slog.String("user", username),
 		slog.String("subscription_sid", subSID),
+		slog.String("source_ip", sourceIP),
 		slog.String("inbound", metadata.Inbound),
 	)
 	return &countingPacketConn{
@@ -116,6 +169,8 @@ func (t *TrafficTracker) RoutedPacketConnection(
 		statsClient:     t.statsClient,
 		subscriptionSID: subSID,
 		logger:          t.logger,
+		tracker:         t,
+		sourceIP:        sourceIP,
 	}
 }
 
@@ -125,6 +180,8 @@ type countingConn struct {
 	statsClient     *stats.Client
 	subscriptionSID string
 	logger          *slog.Logger
+	tracker         *TrafficTracker
+	sourceIP        string
 	upload          atomic.Int64
 	download        atomic.Int64
 	closed          atomic.Bool
@@ -148,8 +205,16 @@ func (c *countingConn) Write(b []byte) (n int, err error) {
 	return
 }
 
+// Upstream returns the underlying connection for capability detection traversal.
+// This allows sing-box to discover the real connection type (e.g., syscall.Conn for splice)
+// and correctly calculate buffer headroom for protocol headers.
+func (c *countingConn) Upstream() any {
+	return c.Conn
+}
+
 func (c *countingConn) Close() error {
 	if c.closed.CompareAndSwap(false, true) {
+		c.tracker.untrackConnection(c.subscriptionSID, c.sourceIP)
 		// Report accumulated traffic when connection closes
 		upload := c.upload.Load()
 		download := c.download.Load()
@@ -171,6 +236,8 @@ type countingPacketConn struct {
 	statsClient     *stats.Client
 	subscriptionSID string
 	logger          *slog.Logger
+	tracker         *TrafficTracker
+	sourceIP        string
 	upload          atomic.Int64
 	download        atomic.Int64
 	closed          atomic.Bool
@@ -204,6 +271,7 @@ func (c *countingPacketConn) Upstream() any {
 
 func (c *countingPacketConn) Close() error {
 	if c.closed.CompareAndSwap(false, true) {
+		c.tracker.untrackConnection(c.subscriptionSID, c.sourceIP)
 		// Report accumulated traffic when connection closes
 		upload := c.upload.Load()
 		download := c.download.Load()

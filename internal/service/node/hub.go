@@ -90,11 +90,12 @@ func (s *Service) hubConnectionLoop() {
 		s.hubConnected = true
 		s.mu.Unlock()
 
-		// Start Hub tasks (status + traffic reporting)
+		// Start Hub tasks (status + traffic + online reporting)
 		// These run while Hub is connected and stop when disconnected
-		s.wg.Add(2)
+		s.wg.Add(3)
 		go s.hubStatusLoop(disconnectCh)
 		go s.hubTrafficLoop(disconnectCh)
+		go s.hubOnlineLoop(disconnectCh)
 
 		// Wait for disconnect signal (channel will be closed by OnDisconnect)
 		select {
@@ -203,6 +204,49 @@ func (s *Service) hubTrafficLoop(disconnectCh <-chan struct{}) {
 	}
 }
 
+// hubOnlineLoop sends periodic online subscription reports via WebSocket while Hub is connected.
+func (s *Service) hubOnlineLoop(disconnectCh <-chan struct{}) {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(s.config.GetOnlineReportInterval())
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-disconnectCh:
+			return
+		case <-ticker.C:
+			s.reportOnlineViaHub()
+		}
+	}
+}
+
+// reportOnlineViaHub sends online subscription data through WebSocket Hub.
+func (s *Service) reportOnlineViaHub() {
+	s.mu.RLock()
+	hubClient := s.hubClient
+	s.mu.RUnlock()
+
+	if hubClient == nil {
+		return
+	}
+
+	onlineUsers := s.trafficTracker.GetOnlineSubscriptions()
+
+	if len(onlineUsers) == 0 {
+		return
+	}
+
+	if err := hubClient.SendEvent(api.EventTypeOnlineSubscriptions, "", onlineUsers); err != nil {
+		s.logger.Warn("Failed to send online subscriptions via hub",
+			slog.Any("err", err),
+			slog.Int("count", len(onlineUsers)),
+		)
+	}
+}
+
 // reportTrafficViaHub sends traffic data through WebSocket Hub.
 func (s *Service) reportTrafficViaHub() {
 	s.mu.RLock()
@@ -284,5 +328,11 @@ func (s *Service) startRESTFallback(ctx context.Context) {
 	s.wg.Add(1)
 	go s.scheduleTaskWithContext(ctx, "REST: Status report", s.config.GetStatusReportInterval(), func() error {
 		return s.reportStatus()
+	})
+
+	// Online users report task
+	s.wg.Add(1)
+	go s.scheduleTaskWithContext(ctx, "REST: Online report", s.config.GetOnlineReportInterval(), func() error {
+		return s.reportOnline()
 	})
 }

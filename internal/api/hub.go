@@ -78,11 +78,12 @@ type APIURLChangedPayload struct {
 //   - config_change: Node configuration changed (Extra may contain change details)
 //   - traffic:       Traffic data update (Extra contains []TrafficReport)
 const (
-	EventTypeConnected    = "connected"     // Node connected
-	EventTypeDisconnected = "disconnected"  // Node disconnected
-	EventTypeError        = "error"         // Error occurred
-	EventTypeConfigChange = "config_change" // Configuration changed
-	EventTypeTraffic      = "traffic"       // Traffic data update
+	EventTypeConnected           = "connected"            // Node connected
+	EventTypeDisconnected        = "disconnected"         // Node disconnected
+	EventTypeError               = "error"                // Error occurred
+	EventTypeConfigChange        = "config_change"        // Configuration changed
+	EventTypeTraffic             = "traffic"              // Traffic data update
+	EventTypeOnlineSubscriptions = "online_subscriptions" // Online subscriptions report
 )
 
 // HubMessage is the unified WebSocket message envelope.
