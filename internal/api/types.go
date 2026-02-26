@@ -72,9 +72,15 @@ type Outbound struct {
 	Server string `json:"server"`      // Server hostname or IP address
 	Port   int    `json:"server_port"` // Server port number
 
+	// Auth fields
+	Username string `json:"username,omitempty"` // Username for SOCKS/HTTP outbound authentication
+	Password string `json:"password,omitempty"` // Password for SS/Trojan/Hysteria2/TUIC/SOCKS/HTTP
+
+	// Socks specific fields
+	Version string `json:"version,omitempty"` // SOCKS version (default: 5)
+
 	// Shadowsocks specific fields
-	Method     string `json:"method,omitempty"`      // Encryption method for SS
-	Password   string `json:"password,omitempty"`    // Password for SS/Trojan/Hysteria2/TUIC
+	Method string `json:"method,omitempty"` // Encryption method for SS
 	Plugin     string `json:"plugin,omitempty"`      // SIP003 plugin name
 	PluginOpts string `json:"plugin_opts,omitempty"` // Plugin options string
 

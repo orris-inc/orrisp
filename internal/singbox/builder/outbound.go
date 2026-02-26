@@ -347,10 +347,9 @@ func convertOutbound(ob api.Outbound) (option.Outbound, error) {
 				Server:     ob.Server,
 				ServerPort: uint16(ob.Port),
 			},
-		}
-		if ob.Password != "" {
-			socksOpts.Username = ob.UUID // Reuse UUID field as username for socks
-			socksOpts.Password = ob.Password
+			Version:  ob.Version,
+			Username: ob.Username,
+			Password: ob.Password,
 		}
 		outbound.Options = &socksOpts
 
@@ -360,10 +359,8 @@ func convertOutbound(ob api.Outbound) (option.Outbound, error) {
 				Server:     ob.Server,
 				ServerPort: uint16(ob.Port),
 			},
-		}
-		if ob.Password != "" {
-			httpOpts.Username = ob.UUID // Reuse UUID field as username for http
-			httpOpts.Password = ob.Password
+			Username: ob.Username,
+			Password: ob.Password,
 		}
 		if ob.TLS != nil {
 			httpOpts.TLS = convertOutboundTLS(ob.TLS)
