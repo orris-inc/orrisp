@@ -40,6 +40,23 @@ func (s *Service) startSingbox() error {
 	return nil
 }
 
+// stopSingbox stops the sing-box service.
+// Used when node status changes to inactive or maintenance.
+func (s *Service) stopSingbox() {
+	s.singboxMu.Lock()
+	defer s.singboxMu.Unlock()
+
+	if s.singboxService == nil {
+		return
+	}
+
+	s.logger.Info("Stopping sing-box due to node status change")
+	if err := s.singboxService.Close(); err != nil {
+		s.logger.Error("Failed to stop sing-box", slog.Any("err", err))
+	}
+	s.singboxService = nil
+}
+
 // reloadSingbox reloads sing-box configuration.
 // Serialized by s.singboxMu to prevent concurrent start/reload.
 func (s *Service) reloadSingbox() error {

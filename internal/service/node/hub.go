@@ -310,7 +310,7 @@ func (s *Service) startRESTFallback(ctx context.Context) {
 		if err != nil {
 			return err
 		}
-		if changed {
+		if changed && !s.isNodeInactive() {
 			if err := s.reloadSingbox(); err != nil {
 				return err
 			}

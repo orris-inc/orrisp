@@ -30,6 +30,13 @@ func (s *Service) OnCommand(cmd *api.CommandData) {
 				s.logger.Error("Failed to reload config", slog.Any("err", err))
 				return
 			}
+
+			// Skip reload if node is not active
+			if s.isNodeInactive() {
+				s.logger.Warn("Skipping reload config command: node is not active")
+				return
+			}
+
 			if _, err := s.syncUsers(); err != nil {
 				s.logger.Error("Failed to sync users", slog.Any("err", err))
 				return
@@ -44,6 +51,11 @@ func (s *Service) OnCommand(cmd *api.CommandData) {
 	case api.CmdActionRestart:
 		s.logger.Info("Executing restart command")
 		go func() {
+			// Skip restart if node is not active
+			if s.isNodeInactive() {
+				s.logger.Warn("Skipping restart command: node is not active")
+				return
+			}
 			if err := s.reloadSingbox(); err != nil {
 				s.logger.Error("Failed to restart singbox", slog.Any("err", err))
 			}
@@ -153,6 +165,15 @@ func (s *Service) OnConfigSync(sync *api.ConfigSyncData) {
 				s.logger.Error("Failed to fetch config after sync notification", slog.Any("err", err))
 				return
 			}
+
+			// Skip reload if node is not active (e.g., inactive or maintenance).
+			// Without this check, a nil-config sync would restart singbox
+			// even when the node was previously stopped due to inactive status.
+			if s.isNodeInactive() {
+				s.logger.Warn("Skipping singbox reload after config sync: node is not active")
+				return
+			}
+
 			if _, err := s.syncUsers(); err != nil {
 				s.logger.Error("Failed to sync users after config sync", slog.Any("err", err))
 				return
@@ -161,6 +182,36 @@ func (s *Service) OnConfigSync(sync *api.ConfigSyncData) {
 				s.logger.Error("Failed to reload singbox after config sync", slog.Any("err", err))
 			}
 		}()
+		return
+	}
+
+	// Check node status from server
+	newStatus := sync.Config.Status
+	if newStatus == "" {
+		newStatus = nodeStatusActive // Default to active for backwards compatibility
+	}
+
+	s.mu.Lock()
+	oldStatus := s.nodeStatus
+	s.nodeStatus = newStatus
+	s.mu.Unlock()
+
+	if newStatus != oldStatus {
+		s.logger.Info("Node status changed",
+			slog.String("old_status", oldStatus),
+			slog.String("new_status", newStatus),
+		)
+	}
+
+	// If node is not active, store config and stop singbox
+	if newStatus != nodeStatusActive {
+		s.mu.Lock()
+		s.nodeConfig = s.convertHubConfigToNodeConfig(sync.Config)
+		s.mu.Unlock()
+		s.logger.Warn("Node is not active, stopping sing-box",
+			slog.String("status", newStatus),
+		)
+		go s.stopSingbox()
 		return
 	}
 
@@ -280,6 +331,11 @@ func (s *Service) OnSubscriptionSync(sync *api.SubscriptionSyncData) {
 
 	// Reload sing-box with updated subscriptions
 	go func() {
+		// Skip reload if node is not active
+		if s.isNodeInactive() {
+			s.logger.Warn("Skipping singbox reload after subscription sync: node is not active")
+			return
+		}
 		if err := s.reloadSingbox(); err != nil {
 			s.logger.Error("Failed to reload singbox after subscription sync", slog.Any("err", err))
 		} else {

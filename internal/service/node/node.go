@@ -15,6 +15,13 @@ import (
 	"github.com/easayliu/orrisp/internal/stats"
 )
 
+// Node status constants define the operational status from the server.
+const (
+	nodeStatusActive      = "active"      // Normal operation
+	nodeStatusInactive    = "inactive"    // Node should not serve traffic
+	nodeStatusMaintenance = "maintenance" // Node is under maintenance
+)
+
 // Package-level version variable, set by main package (atomic for concurrent access)
 var agentVersion atomic.Value
 
@@ -46,6 +53,7 @@ type Service struct {
 
 	mu           sync.RWMutex
 	nodeConfig   *api.NodeConfig
+	nodeStatus   string // Current node status from server (active, inactive, maintenance)
 	currentUsers []api.Subscription
 	startTime    time.Time
 	ctx          context.Context
@@ -112,6 +120,7 @@ func New(cfg *config.Config, nodeInstance config.NodeInstance, logger *slog.Logg
 		statsClient:    statsClient,
 		trafficTracker: trafficTracker,
 		logger:         nodeLogger,
+		nodeStatus:     nodeStatusActive,
 		startTime:      time.Now(),
 	}, nil
 }
@@ -236,6 +245,14 @@ func (s *Service) Stop() error {
 	return nil
 }
 
+// isNodeInactive returns true if the node is not in active status.
+func (s *Service) isNodeInactive() bool {
+	s.mu.RLock()
+	status := s.nodeStatus
+	s.mu.RUnlock()
+	return status != nodeStatusActive
+}
+
 // cancelService safely cancels the service context with lock protection.
 // This prevents nil pointer panic when called concurrently with Stop().
 func (s *Service) cancelService() {
@@ -263,6 +280,7 @@ func (s *Service) GetNodeInfo() map[string]interface{} {
 
 	info["user_count"] = len(s.currentUsers)
 	info["hub_connected"] = s.hubConnected
+	info["node_status"] = s.nodeStatus
 
 	return info
 }

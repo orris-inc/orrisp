@@ -153,6 +153,7 @@ type TunnelHealthReport struct {
 // ConfigData represents the node configuration for hub sync.
 type ConfigData struct {
 	NodeSID           string       `json:"node_id"`
+	Status            string       `json:"status"`                      // Node status: active, inactive, maintenance
 	Protocol          string       `json:"protocol"`                    // Protocol type: shadowsocks, trojan, vless, vmess, hysteria2, tuic, anytls
 	ServerHost        string       `json:"server_host"`
 	ServerPort        int          `json:"server_port"`
