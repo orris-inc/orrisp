@@ -266,6 +266,7 @@ func (s *Service) convertHubConfigToNodeConfig(hubConfig *api.ConfigData) *api.N
 		Route:             hubConfig.Route,
 		DNS:               hubConfig.DNS,
 		Outbounds:         hubConfig.Outbounds,
+		ForwardRuleRoutes: hubConfig.ForwardRuleRoutes,
 
 		// VLESS specific fields (map from simplified ConfigData field names)
 		VLESSFlow:              hubConfig.Flow,

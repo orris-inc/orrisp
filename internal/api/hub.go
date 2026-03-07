@@ -165,9 +165,10 @@ type ConfigData struct {
 	ServiceName       string       `json:"service_name,omitempty"`
 	SNI               string       `json:"sni,omitempty"`
 	AllowInsecure     bool         `json:"allow_insecure"`
-	Route             *RouteConfig `json:"route,omitempty"`     // Routing configuration for traffic splitting
-	DNS               *DnsConfig   `json:"dns,omitempty"`       // DNS configuration for DNS-based unlocking
-	Outbounds         []Outbound   `json:"outbounds,omitempty"` // Outbound configs for nodes referenced in route rules
+	Route             *RouteConfig      `json:"route,omitempty"`               // Routing configuration for traffic splitting
+	DNS               *DnsConfig        `json:"dns,omitempty"`                 // DNS configuration for DNS-based unlocking
+	Outbounds         []Outbound        `json:"outbounds,omitempty"`           // Outbound configs for nodes referenced in route rules
+	ForwardRuleRoutes []ForwardRuleRoute `json:"forward_rule_routes,omitempty"` // Per-forward-rule routing configurations
 
 	// VLESS specific fields
 	Flow        string `json:"flow,omitempty"`        // VLESS flow control (xtls-rprx-vision)

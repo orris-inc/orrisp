@@ -26,7 +26,39 @@ func buildRouteConfig(routeConfig *api.RouteConfig) *option.RouteOptions {
 		routeOpts.Rules = append(routeOpts.Rules, singRule)
 	}
 
+	// Convert remote rule-set entries
+	for _, entry := range routeConfig.RuleSetEntries {
+		rs := convertRuleSetEntry(entry)
+		routeOpts.RuleSet = append(routeOpts.RuleSet, rs)
+	}
+
 	return routeOpts
+}
+
+// convertRuleSetEntry converts api.RuleSetEntry to sing-box RuleSet (remote type).
+func convertRuleSetEntry(entry api.RuleSetEntry) option.RuleSet {
+	format := entry.Format
+	if format == "" {
+		format = "binary"
+	}
+
+	rs := option.RuleSet{
+		Type:   "remote",
+		Tag:    entry.Tag,
+		Format: format,
+		RemoteOptions: option.RemoteRuleSet{
+			URL:            entry.URL,
+			DownloadDetour: entry.DownloadDetour,
+		},
+	}
+
+	if entry.UpdateInterval != "" {
+		if d, err := time.ParseDuration(entry.UpdateInterval); err == nil {
+			rs.RemoteOptions.UpdateInterval = badoption.Duration(d)
+		}
+	}
+
+	return rs
 }
 
 // convertRouteRule converts a single api.RouteRule to sing-box Rule
@@ -39,6 +71,11 @@ func convertRouteRule(rule api.RouteRule) option.Rule {
 				Outbound: rule.Outbound,
 			},
 		},
+	}
+
+	// Inbound matching (for per-forward-rule routing)
+	if len(rule.Inbound) > 0 {
+		defaultRule.Inbound = rule.Inbound
 	}
 
 	// Domain matching

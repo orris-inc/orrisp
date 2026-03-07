@@ -81,21 +81,25 @@ func convertDNSServer(server api.DnsServer) option.DNSServerOptions {
 		}
 	}
 
-	// Build base remote options with detour and domain resolver
-	baseLocal := option.LocalDNSServerOptions{
+	// Build base options with detour and domain resolver
+	rawLocal := option.RawLocalDNSServerOptions{
 		DialerOptions: option.DialerOptions{
 			Detour: server.Detour,
 		},
 	}
 	if server.AddressResolver != "" {
-		baseLocal.DialerOptions.DomainResolver = &option.DomainResolveOptions{
+		rawLocal.DialerOptions.DomainResolver = &option.DomainResolveOptions{
 			Server:   server.AddressResolver,
 			Strategy: parseDomainStrategy(server.AddressStrategy),
 		}
 	}
 
+	baseLocal := option.LocalDNSServerOptions{
+		RawLocalDNSServerOptions: rawLocal,
+	}
+
 	baseRemote := option.RemoteDNSServerOptions{
-		LocalDNSServerOptions: baseLocal,
+		RawLocalDNSServerOptions: rawLocal,
 	}
 
 	// Parse server address and port from URL

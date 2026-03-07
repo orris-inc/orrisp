@@ -25,9 +25,10 @@ type NodeConfig struct {
 	SpeedLimit        uint64       `json:"speed_limit"`
 	DeviceLimit       int          `json:"device_limit"`
 	RuleListPath      string       `json:"rule_list_path,omitempty"` // Deprecated: use Route instead
-	Route             *RouteConfig `json:"route,omitempty"`          // Routing configuration for traffic splitting
-	DNS               *DnsConfig   `json:"dns,omitempty"`            // DNS configuration for DNS-based unlocking
-	Outbounds         []Outbound   `json:"outbounds,omitempty"`      // Outbound configs for nodes referenced in route rules
+	Route             *RouteConfig      `json:"route,omitempty"`               // Routing configuration for traffic splitting
+	DNS               *DnsConfig        `json:"dns,omitempty"`                 // DNS configuration for DNS-based unlocking
+	Outbounds         []Outbound        `json:"outbounds,omitempty"`           // Outbound configs for nodes referenced in route rules
+	ForwardRuleRoutes []ForwardRuleRoute `json:"forward_rule_routes,omitempty"` // Per-forward-rule routing configurations
 
 	// VLESS specific fields
 	VLESSFlow              string `json:"vless_flow,omitempty"`                // VLESS flow control (xtls-rprx-vision)
@@ -154,16 +155,35 @@ type CustomOutbound struct {
 	Settings map[string]any `json:"settings,omitempty"` // Protocol-specific configuration (password, uuid, method, tls, transport, etc.)
 }
 
+// ForwardRuleRoute represents per-forward-rule routing configuration.
+type ForwardRuleRoute struct {
+	RuleSID string       `json:"rule_sid"` // Forward rule SID (e.g., "fr_xxx")
+	Route   *RouteConfig `json:"route"`    // Route configuration for this rule
+}
+
 // RouteConfig represents the routing configuration for sing-box.
 // It defines how traffic should be routed based on matching rules.
 type RouteConfig struct {
 	Rules           []RouteRule      `json:"rules,omitempty"`            // Ordered list of routing rules
 	Final           string           `json:"final"`                      // Default outbound when no rules match (direct/block/proxy/node_xxx/custom_xxx)
 	CustomOutbounds []CustomOutbound `json:"custom_outbounds,omitempty"` // User-defined outbound configurations
+	RuleSetEntries  []RuleSetEntry   `json:"rule_set_entries,omitempty"` // Remote rule-set sources referenced by rules
+}
+
+// RuleSetEntry represents a remote rule-set source for sing-box route configuration.
+type RuleSetEntry struct {
+	Tag            string `json:"tag"`                       // Unique identifier referenced by rules
+	URL            string `json:"url"`                       // Remote URL of the rule-set resource
+	Format         string `json:"format,omitempty"`          // Resource format: binary (default) or source
+	DownloadDetour string `json:"download_detour,omitempty"` // Optional outbound tag for downloading
+	UpdateInterval string `json:"update_interval,omitempty"` // Optional update interval (e.g. "1d", "12h")
 }
 
 // RouteRule represents a single routing rule, compatible with sing-box route rule.
 type RouteRule struct {
+	// Inbound matching (for per-forward-rule routing)
+	Inbound []string `json:"inbound,omitempty"` // Match by inbound tag (forward rule SID)
+
 	// Domain matching
 	Domain        []string `json:"domain,omitempty"`         // Exact domain match
 	DomainSuffix  []string `json:"domain_suffix,omitempty"`  // Domain suffix match
