@@ -114,12 +114,19 @@ func BuildConfig(nodeConfig *api.NodeConfig, subscriptions []api.Subscription, c
 		options.Outbounds = append(options.Outbounds, singOutbound)
 	}
 
-	// Build merged route config from node-level route and per-forward-rule routes
-	mergedRoute := mergeRouteConfigs(nodeConfig.Route, nodeConfig.ForwardRuleRoutes)
+	// Use server-merged route config directly. The server already prepends per-forward-rule
+	// routes before node defaults in the correct order. We strip inbound filters because the
+	// agent uses a single inbound per protocol (e.g. "ss-in") and cannot match forward rule
+	// SIDs (e.g. "fr_xxx") as inbound tags.
+	if nodeConfig.Route != nil {
+		for i := range nodeConfig.Route.Rules {
+			nodeConfig.Route.Rules[i].Inbound = nil
+		}
+	}
 
-	// Add custom outbounds from merged route config
-	if mergedRoute != nil {
-		for _, co := range mergedRoute.CustomOutbounds {
+	// Add custom outbounds from route config
+	if nodeConfig.Route != nil {
+		for _, co := range nodeConfig.Route.CustomOutbounds {
 			singOutbound, err := convertCustomOutbound(co)
 			if err != nil {
 				return nil, fmt.Errorf("failed to convert custom outbound %s: %w", co.Tag, err)
@@ -127,7 +134,7 @@ func BuildConfig(nodeConfig *api.NodeConfig, subscriptions []api.Subscription, c
 			options.Outbounds = append(options.Outbounds, singOutbound)
 		}
 
-		routeOpts := buildRouteConfig(mergedRoute)
+		routeOpts := buildRouteConfig(nodeConfig.Route)
 		options.Route = routeOpts
 	}
 
@@ -138,44 +145,6 @@ func BuildConfig(nodeConfig *api.NodeConfig, subscriptions []api.Subscription, c
 	}
 
 	return options, nil
-}
-
-// mergeRouteConfigs merges the node-level route config with per-forward-rule route configs.
-// Forward-rule routes contribute their rules, custom outbounds, and rule-set entries
-// into a single RouteConfig so sing-box sees one unified routing table.
-func mergeRouteConfigs(nodeRoute *api.RouteConfig, forwardRuleRoutes []api.ForwardRuleRoute) *api.RouteConfig {
-	if nodeRoute == nil && len(forwardRuleRoutes) == 0 {
-		return nil
-	}
-
-	merged := &api.RouteConfig{}
-	if nodeRoute != nil {
-		merged.Rules = append(merged.Rules, nodeRoute.Rules...)
-		merged.Final = nodeRoute.Final
-		merged.CustomOutbounds = append(merged.CustomOutbounds, nodeRoute.CustomOutbounds...)
-		merged.RuleSetEntries = append(merged.RuleSetEntries, nodeRoute.RuleSetEntries...)
-	}
-
-	for _, frr := range forwardRuleRoutes {
-		if frr.Route == nil {
-			continue
-		}
-		merged.Rules = append(merged.Rules, frr.Route.Rules...)
-		merged.CustomOutbounds = append(merged.CustomOutbounds, frr.Route.CustomOutbounds...)
-		merged.RuleSetEntries = append(merged.RuleSetEntries, frr.Route.RuleSetEntries...)
-
-		// Convert per-forward-rule Final into a catch-all rule with inbound matching.
-		// sing-box only supports one global Final, so we emit an inbound-scoped
-		// fallback rule to preserve per-forward-rule default routing behavior.
-		if frr.Route.Final != "" && frr.RuleSID != "" {
-			merged.Rules = append(merged.Rules, api.RouteRule{
-				Inbound:  []string{frr.RuleSID},
-				Outbound: frr.Route.Final,
-			})
-		}
-	}
-
-	return merged
 }
 
 // buildTLSOptions builds TLS options with compatibility settings.

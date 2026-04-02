@@ -236,6 +236,7 @@ func (s *Service) OnConfigSync(sync *api.ConfigSyncData) {
 		s.logger.Info("Config updated from hub sync",
 			slog.String("protocol", sync.Config.Protocol),
 			slog.Int("server_port", sync.Config.ServerPort),
+			slog.Int("forward_rule_routes", len(sync.Config.ForwardRuleRoutes)),
 		)
 
 		if _, err := s.syncUsers(); err != nil {

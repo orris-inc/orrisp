@@ -3,6 +3,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -305,12 +306,18 @@ func (s *Service) fetchNodeConfig() error {
 	s.nodeConfig = nodeConfig
 	s.mu.Unlock()
 
+	// Debug: dump full config JSON to verify forward rule routes
+	if configJSON, err := json.MarshalIndent(nodeConfig, "", "  "); err == nil {
+		s.logger.Debug("Full node config received", slog.String("config", string(configJSON)))
+	}
+
 	s.logger.Info("Node configuration fetched successfully",
 		slog.String("node_sid", nodeConfig.NodeSID),
 		slog.String("protocol", nodeConfig.Protocol),
 		slog.String("host", nodeConfig.ServerHost),
 		slog.Int("port", nodeConfig.ServerPort),
 		slog.String("method", nodeConfig.EncryptionMethod),
+		slog.Int("forward_rule_routes", len(nodeConfig.ForwardRuleRoutes)),
 	)
 
 	return nil
