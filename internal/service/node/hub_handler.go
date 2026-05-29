@@ -229,6 +229,19 @@ func (s *Service) OnConfigSync(sync *api.ConfigSyncData) {
 		s.configMu.Lock()
 		defer s.configMu.Unlock()
 
+		// Version gate: drop a stale incremental sync that lost the race against
+		// a newer one. The compare/update happens inside configMu so concurrent
+		// apply goroutines are ordered regardless of lock-acquisition order.
+		// Full sync is server-authoritative and always applied.
+		if !sync.FullSync && sync.Version <= s.lastConfigVersion {
+			s.logger.Warn("Skipping outdated config sync",
+				slog.Uint64("received_version", sync.Version),
+				slog.Uint64("current_version", s.lastConfigVersion),
+			)
+			return
+		}
+		s.lastConfigVersion = sync.Version
+
 		s.mu.Lock()
 		s.nodeConfig = s.convertHubConfigToNodeConfig(sync.Config)
 		s.mu.Unlock()

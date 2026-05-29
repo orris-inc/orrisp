@@ -68,14 +68,20 @@ type Service struct {
 	// concurrent pipelines from overwriting each other's results
 	configMu sync.Mutex
 
+	// lastConfigVersion is the version of the most recently applied hub config
+	// sync. Guarded by configMu. Used to drop stale incremental syncs that lost
+	// the race against a newer one, since config is applied last-write-wins
+	// inside configMu but goroutines acquire the lock in non-deterministic order.
+	lastConfigVersion uint64
+
 	// Hub connection state
-	hubConnected       bool
-	hubDisconnect      chan struct{} // Signal when hub disconnects (broadcast via close)
-	hubDisconnectOnce  *sync.Once    // Ensures hubDisconnect is closed exactly once per connection
+	hubConnected      bool
+	hubDisconnect     chan struct{} // Signal when hub disconnects (broadcast via close)
+	hubDisconnectOnce *sync.Once    // Ensures hubDisconnect is closed exactly once per connection
 
 	// TLS certificate (auto-generated if not configured)
-	certMu  sync.Mutex // protects cert fields below
-	certSNI string     // SNI for current self-signed cert; empty if using configured paths
+	certMu   sync.Mutex // protects cert fields below
+	certSNI  string     // SNI for current self-signed cert; empty if using configured paths
 	certPath string
 	keyPath  string
 
